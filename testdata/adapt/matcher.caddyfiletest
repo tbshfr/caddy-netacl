@@ -1,0 +1,115 @@
+{
+	netacl {
+		db_country /var/lib/netacl/dbip-country-lite.mmdb
+		group badhosts asn 12345
+	}
+}
+
+:8080 {
+	@blocked netacl deny {
+		deny @badhosts
+		deny country UNK
+		default allow
+	}
+	respond @blocked "Forbidden" 403
+
+	@trusted {
+		netacl allow {
+			allow private_ranges
+			default deny
+		}
+		path /admin/*
+	}
+	respond @trusted "hello admin"
+	respond "hello"
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":8080"
+					],
+					"routes": [
+						{
+							"match": [
+								{
+									"netacl": {
+										"decision": "deny",
+										"rules": [
+											{
+												"action": "deny",
+												"groups": [
+													"badhosts"
+												]
+											},
+											{
+												"action": "deny",
+												"countries": [
+													"UNK"
+												]
+											}
+										],
+										"default": "allow"
+									}
+								}
+							],
+							"handle": [
+								{
+									"body": "Forbidden",
+									"handler": "static_response",
+									"status_code": 403
+								}
+							]
+						},
+						{
+							"match": [
+								{
+									"netacl": {
+										"decision": "allow",
+										"rules": [
+											{
+												"action": "allow",
+												"private_ranges": true
+											}
+										],
+										"default": "deny"
+									},
+									"path": [
+										"/admin/*"
+									]
+								}
+							],
+							"handle": [
+								{
+									"body": "hello admin",
+									"handler": "static_response"
+								}
+							]
+						},
+						{
+							"handle": [
+								{
+									"body": "hello",
+									"handler": "static_response"
+								}
+							]
+						}
+					]
+				}
+			}
+		},
+		"netacl": {
+			"db_country": "/var/lib/netacl/dbip-country-lite.mmdb",
+			"groups": {
+				"badhosts": {
+					"asns": [
+						12345
+					]
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,71 @@
+{
+	netacl {
+		auto_update
+		db_asn /var/lib/geoip/GeoLite2-ASN.mmdb
+		group dach country DE AT CH
+	}
+}
+
+:8080 {
+	netacl {
+		allow @dach
+		deny asn 64496
+		default deny
+	}
+	respond "ok"
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":8080"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"default": "deny",
+									"handler": "netacl",
+									"rules": [
+										{
+											"action": "allow",
+											"groups": [
+												"dach"
+											]
+										},
+										{
+											"action": "deny",
+											"asns": [
+												64496
+											]
+										}
+									]
+								},
+								{
+									"body": "ok",
+									"handler": "static_response"
+								}
+							]
+						}
+					]
+				}
+			}
+		},
+		"netacl": {
+			"db_asn": "/var/lib/geoip/GeoLite2-ASN.mmdb",
+			"auto_update": true,
+			"groups": {
+				"dach": {
+					"countries": [
+						"DE",
+						"AT",
+						"CH"
+					]
+				}
+			}
+		}
+	}
+}

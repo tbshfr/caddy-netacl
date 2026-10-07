@@ -1,0 +1,91 @@
+{
+	netacl {
+		group partners 192.0.2.0/24 {
+			198.51.100.0/24 2001:db8::/48
+			asn 64496 64497
+			country DE
+			continent EU NA
+			@other
+		}
+		group other ip_file /etc/netacl/partners.txt private_ranges
+	}
+}
+
+:8080 {
+	netacl {
+		allow @partners
+		status 451
+		on_lookup_error deny
+		default deny
+	}
+	respond "ok"
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":8080"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"default": "deny",
+									"handler": "netacl",
+									"on_lookup_error": "deny",
+									"rules": [
+										{
+											"action": "allow",
+											"groups": [
+												"partners"
+											]
+										}
+									],
+									"status_code": 451
+								},
+								{
+									"body": "ok",
+									"handler": "static_response"
+								}
+							]
+						}
+					]
+				}
+			}
+		},
+		"netacl": {
+			"groups": {
+				"other": {
+					"ip_files": [
+						"/etc/netacl/partners.txt"
+					],
+					"private_ranges": true
+				},
+				"partners": {
+					"groups": [
+						"other"
+					],
+					"ips": [
+						"192.0.2.0/24",
+						"198.51.100.0/24",
+						"2001:db8::/48"
+					],
+					"asns": [
+						64496,
+						64497
+					],
+					"countries": [
+						"DE"
+					],
+					"continents": [
+						"EU",
+						"NA"
+					]
+				}
+			}
+		}
+	}
+}

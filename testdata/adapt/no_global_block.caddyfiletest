@@ -1,0 +1,70 @@
+:8080 {
+	netacl {
+		allow ip 192.0.2.1 ip_file /etc/allow.txt
+		default deny
+	}
+	handle_errors {
+		respond "{err.status_code} go away"
+	}
+	respond "ok"
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":8080"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"default": "deny",
+									"handler": "netacl",
+									"rules": [
+										{
+											"action": "allow",
+											"ip_files": [
+												"/etc/allow.txt"
+											],
+											"ips": [
+												"192.0.2.1"
+											]
+										}
+									]
+								},
+								{
+									"body": "ok",
+									"handler": "static_response"
+								}
+							]
+						}
+					],
+					"errors": {
+						"routes": [
+							{
+								"handle": [
+									{
+										"handler": "subroute",
+										"routes": [
+											{
+												"handle": [
+													{
+														"body": "{http.error.status_code} go away",
+														"handler": "static_response"
+													}
+												]
+											}
+										]
+									}
+								]
+							}
+						]
+					}
+				}
+			}
+		}
+	}
+}

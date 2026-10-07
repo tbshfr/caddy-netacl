@@ -1,0 +1,155 @@
+{
+	netacl {
+		db_country /var/lib/netacl/dbip-country-lite.mmdb
+		db_asn     /var/lib/netacl/dbip-asn-lite.mmdb
+		reload_interval 1h
+
+		group office   203.0.113.0/24 198.51.100.7
+		group vpn      10.8.0.0/16
+		group staff    @office @vpn
+		group badhosts asn 12345 AS67890
+		group friendly country de SE no
+		group europe   continent eu
+		group blocklist ip_file /etc/netacl/blocklist.txt
+	}
+}
+
+example.com {
+	netacl {
+		allow @staff
+		deny  @badhosts @blocklist
+		allow @friendly
+		allow ip 192.0.2.10 2001:db8::/32
+		allow private_ranges
+		default deny
+	}
+	reverse_proxy localhost:8080
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":443"
+					],
+					"routes": [
+						{
+							"match": [
+								{
+									"host": [
+										"example.com"
+									]
+								}
+							],
+							"handle": [
+								{
+									"handler": "subroute",
+									"routes": [
+										{
+											"handle": [
+												{
+													"default": "deny",
+													"handler": "netacl",
+													"rules": [
+														{
+															"action": "allow",
+															"groups": [
+																"staff"
+															]
+														},
+														{
+															"action": "deny",
+															"groups": [
+																"badhosts",
+																"blocklist"
+															]
+														},
+														{
+															"action": "allow",
+															"groups": [
+																"friendly"
+															]
+														},
+														{
+															"action": "allow",
+															"ips": [
+																"192.0.2.10",
+																"2001:db8::/32"
+															]
+														},
+														{
+															"action": "allow",
+															"private_ranges": true
+														}
+													]
+												},
+												{
+													"handler": "reverse_proxy",
+													"upstreams": [
+														{
+															"dial": "localhost:8080"
+														}
+													]
+												}
+											]
+										}
+									]
+								}
+							],
+							"terminal": true
+						}
+					]
+				}
+			}
+		},
+		"netacl": {
+			"db_country": "/var/lib/netacl/dbip-country-lite.mmdb",
+			"db_asn": "/var/lib/netacl/dbip-asn-lite.mmdb",
+			"reload_interval": 3600000000000,
+			"groups": {
+				"badhosts": {
+					"asns": [
+						12345,
+						67890
+					]
+				},
+				"blocklist": {
+					"ip_files": [
+						"/etc/netacl/blocklist.txt"
+					]
+				},
+				"europe": {
+					"continents": [
+						"EU"
+					]
+				},
+				"friendly": {
+					"countries": [
+						"DE",
+						"SE",
+						"NO"
+					]
+				},
+				"office": {
+					"ips": [
+						"203.0.113.0/24",
+						"198.51.100.7"
+					]
+				},
+				"staff": {
+					"groups": [
+						"office",
+						"vpn"
+					]
+				},
+				"vpn": {
+					"ips": [
+						"10.8.0.0/16"
+					]
+				}
+			}
+		}
+	}
+}

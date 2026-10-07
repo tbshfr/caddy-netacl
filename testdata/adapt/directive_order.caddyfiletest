@@ -1,0 +1,101 @@
+:8080 {
+	respond "hi"
+	redir /old /new
+	rewrite /a /b
+	netacl {
+		deny ip 192.0.2.0/24
+		default allow
+	}
+	header X-Test yes
+	vars foo bar
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":8080"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"default": "allow",
+									"handler": "netacl",
+									"rules": [
+										{
+											"action": "deny",
+											"ips": [
+												"192.0.2.0/24"
+											]
+										}
+									]
+								},
+								{
+									"foo": "bar",
+									"handler": "vars"
+								},
+								{
+									"handler": "headers",
+									"response": {
+										"set": {
+											"X-Test": [
+												"yes"
+											]
+										}
+									}
+								}
+							]
+						},
+						{
+							"match": [
+								{
+									"path": [
+										"/old"
+									]
+								}
+							],
+							"handle": [
+								{
+									"handler": "static_response",
+									"headers": {
+										"Location": [
+											"/new"
+										]
+									},
+									"status_code": 302
+								}
+							]
+						},
+						{
+							"group": "group0",
+							"match": [
+								{
+									"path": [
+										"/a"
+									]
+								}
+							],
+							"handle": [
+								{
+									"handler": "rewrite",
+									"uri": "/b"
+								}
+							]
+						},
+						{
+							"handle": [
+								{
+									"body": "hi",
+									"handler": "static_response"
+								}
+							]
+						}
+					]
+				}
+			}
+		}
+	}
+}
