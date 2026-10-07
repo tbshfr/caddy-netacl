@@ -373,6 +373,8 @@ With `metrics` enabled in Caddy:
 | `caddy_netacl_db_downloads_total` | `db` (`country`, `asn`), `result` (`success`, `error`) |
 | `caddy_netacl_db_build_epoch_seconds` | `db`: alert on this to catch stale databases |
 
+A Grafana dashboard for these metrics is in [`grafana/`](grafana/).
+
 ## JSON config
 
 ```json
