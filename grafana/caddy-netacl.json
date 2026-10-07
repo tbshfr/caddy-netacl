@@ -917,7 +917,7 @@
       "type": "timeseries",
       "id": 16,
       "title": "Reloads",
-      "description": "Reloads triggered by reload_interval when a file changed. Series appear after the first reload.",
+      "description": "Reloads triggered by reload_interval when a file changed.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"

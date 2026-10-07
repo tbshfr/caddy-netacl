@@ -84,6 +84,15 @@ func (m *metrics) resolve() {
 			m.lookupCounters[[2]string{db, result}] = m.lookups.WithLabelValues(db, result)
 		}
 	}
+	// Export reload and download series at 0 up front: a series that first
+	// appears at 1 is invisible to increase(), hiding the first failure.
+	for _, result := range []string{"success", "error"} {
+		for _, db := range []string{dbCountry.String(), dbASN.String()} {
+			m.reloads.WithLabelValues(db, result)
+			m.downloads.WithLabelValues(db, result)
+		}
+		m.reloads.WithLabelValues("ip_file", result)
+	}
 }
 
 func registerOrReuse[C prometheus.Collector](reg prometheus.Registerer, c C) (C, error) {
