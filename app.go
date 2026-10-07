@@ -148,7 +148,28 @@ func (a *App) Start() error {
 	if len(a.managed) > 0 {
 		a.wg.Go(func() { a.updateLoop(ctx) })
 	}
+	a.logStart()
 	return nil
+}
+
+func (a *App) logStart() {
+	inUse := func(h *dbHolder) string {
+		if h == nil {
+			return "unused"
+		}
+		return h.path
+	}
+	a.mu.Lock()
+	fields := []zap.Field{
+		zap.String("db_country", inUse(a.country)),
+		zap.String("db_asn", inUse(a.asn)),
+		zap.Int("ip_files", len(a.ipLists)),
+	}
+	a.mu.Unlock()
+	a.logger.Info("started", append(fields,
+		zap.Int("groups", len(a.groups.flat)),
+		zap.Bool("auto_update", a.AutoUpdate),
+		zap.Duration("reload_interval", time.Duration(a.ReloadInterval)))...)
 }
 
 // Caddy creates a new app on every config reload, so the old loops must not

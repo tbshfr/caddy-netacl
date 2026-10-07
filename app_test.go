@@ -558,3 +558,27 @@ func assertVars(t *testing.T, r *http.Request, want map[string]string) {
 		}
 	}
 }
+
+func TestStartLogsSummary(t *testing.T) {
+	path := testDB(t, dbCountry)
+	app, logs := newTestApp(t, &App{DBCountry: path})
+	p := Policy{Rules: []Rule{{Action: "allow", Selector: Selector{Countries: []string{"DE"}}}}, Default: "deny"}
+	if _, err := p.compile(app, zap.NewNop()); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	started := logs.FilterMessage("started").All()
+	if len(started) != 1 {
+		t.Fatalf("got %d started logs, want 1", len(started))
+	}
+	fields := started[0].ContextMap()
+	if fields["db_country"] != path {
+		t.Errorf("db_country = %v, want %s", fields["db_country"], path)
+	}
+	if fields["db_asn"] != "unused" {
+		t.Errorf("db_asn = %v, want unused", fields["db_asn"])
+	}
+}

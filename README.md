@@ -353,7 +353,10 @@ queried, and its var stays empty.
 
 ### Logs
 
-Database downloads, loads and reloads, and `ip_file` loads and reloads, are
+Each time a config loads, netacl logs `started` at `info`. The line lists
+the database files in use (`unused` for one no rule needs), the number of
+`ip_file` lists and groups, and whether `auto_update` and `reload_interval`
+are on. Database downloads, loads and reloads, and `ip_file` loads and reloads, are
 logged at `info`. Failures are logged at `error`. Per-request decisions and
 lookups are logged at `debug` only, so client IPs do not appear in normal
 logs.
