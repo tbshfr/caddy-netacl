@@ -25,11 +25,8 @@ const lookupVarKey = "netacl.lookup_state"
 
 // Forwarding headers are deliberately not read here: Caddy's client_ip
 // already applies trusted_proxies, and reading them would bypass it.
-func clientAddr(r *http.Request) netip.Addr {
-	var s string
-	if v, ok := caddyhttp.GetVar(r.Context(), caddyhttp.ClientIPVarKey).(string); ok {
-		s = v
-	}
+func clientAddr(vars map[string]any, r *http.Request) netip.Addr {
+	s, _ := vars[caddyhttp.ClientIPVarKey].(string)
 	if s == "" {
 		s = r.RemoteAddr
 	}
@@ -40,11 +37,12 @@ func parseAddr(s string) netip.Addr {
 	if s == "" {
 		return netip.Addr{}
 	}
-	if ap, err := netip.ParseAddrPort(s); err == nil {
-		return ap.Addr().Unmap().WithZone("")
-	}
+	// client_ip is a bare address, so that is tried first.
 	if a, err := netip.ParseAddr(s); err == nil {
 		return a.Unmap().WithZone("")
+	}
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr().Unmap().WithZone("")
 	}
 	// "[::1]" without a port
 	if host, _, err := net.SplitHostPort(s + ":0"); err == nil {
@@ -55,34 +53,78 @@ func parseAddr(s string) netip.Addr {
 	return netip.Addr{}
 }
 
-func requestLookupState(r *http.Request, addr netip.Addr) *lookupState {
-	if ls, ok := caddyhttp.GetVar(r.Context(), lookupVarKey).(*lookupState); ok && ls.addr == addr {
+// requestVars returns the request's vars map, or nil outside Caddy's HTTP
+// server. It is fetched once per evaluation because each lookup walks the
+// request's context chain.
+func requestVars(r *http.Request) map[string]any {
+	vars, _ := r.Context().Value(caddyhttp.VarsCtxKey).(map[string]any)
+	return vars
+}
+
+func requestLookupState(vars map[string]any, addr netip.Addr) *lookupState {
+	if ls, ok := vars[lookupVarKey].(*lookupState); ok && ls.addr == addr {
 		return ls
 	}
 	ls := &lookupState{addr: addr}
-	caddyhttp.SetVar(r.Context(), lookupVarKey, ls)
+	if vars != nil {
+		vars[lookupVarKey] = ls
+	}
 	return ls
 }
 
-func setDecisionVars(r *http.Request, d Decision, ls *lookupState) {
-	ctx := r.Context()
-	caddyhttp.SetVar(ctx, VarDecision, d.Action.String())
-	caddyhttp.SetVar(ctx, VarRule, d.ruleName())
+// Var values are boxed once up front: storing a string in the vars map
+// otherwise allocates on every request.
+var (
+	actionVars           = [...]any{ActionAllow: ActionAllow.String(), ActionDeny: ActionDeny.String()}
+	ruleDefaultVar   any = Decision{Rule: ruleDefault}.ruleName()
+	ruleLookupErrVar any = Decision{Rule: ruleLookupError}.ruleName()
+	// Two-letter country and continent codes, see codeVar.
+	codeVars = func() (v [26 * 26]any) {
+		for i := range v {
+			v[i] = string([]byte{'A' + byte(i/26), 'A' + byte(i%26)})
+		}
+		return v
+	}()
+)
 
-	country, continent := "", ""
+func codeVar(s string) any {
+	if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
+		return codeVars[int(s[0]-'A')*26+int(s[1]-'A')]
+	}
+	return s
+}
+
+func setDecisionVars(vars map[string]any, rs *ruleset, d Decision, ls *lookupState) {
+	if vars == nil {
+		return
+	}
+	vars[VarDecision] = actionVars[d.Action]
+	switch d.Rule {
+	case ruleDefault:
+		vars[VarRule] = ruleDefaultVar
+	case ruleLookupError:
+		vars[VarRule] = ruleLookupErrVar
+	default:
+		vars[VarRule] = rs.rules[d.Rule].varValue
+	}
+
+	var country, continent any = "", ""
 	if ls.countryDone && !ls.countryErr {
 		country = UnknownCountry
 		if ls.country.found {
-			country = ls.country.country
+			country = codeVar(ls.country.country)
 		}
-		continent = ls.country.continent
+		continent = codeVar(ls.country.continent)
 	}
-	caddyhttp.SetVar(ctx, VarCountry, country)
-	caddyhttp.SetVar(ctx, VarContinent, continent)
+	vars[VarCountry] = country
+	vars[VarContinent] = continent
 
-	asn := ""
+	var asn any = ""
 	if ls.asnDone && !ls.asnErr && ls.asn.found {
-		asn = strconv.FormatUint(uint64(ls.asn.asn), 10)
+		asn = ls.asn.varValue
+		if asn == nil {
+			asn = strconv.FormatUint(uint64(ls.asn.asn), 10)
+		}
 	}
-	caddyhttp.SetVar(ctx, VarASN, asn)
+	vars[VarASN] = asn
 }

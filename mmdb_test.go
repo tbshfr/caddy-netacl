@@ -28,10 +28,13 @@ func TestCountryLookup(t *testing.T) {
 		ipCloudflare: {found: true, country: "AU", continent: "OC"},
 		ipUnknown:    {},
 	}
-	for ip, want := range tests {
-		got, err := h.lookupCountry(netip.MustParseAddr(ip))
-		if err != nil || got != want {
-			t.Errorf("%s: got %+v, %v; want %+v", ip, got, err, want)
+	// The second round is served from the record cache.
+	for range 2 {
+		for ip, want := range tests {
+			got, err := h.lookupCountry(netip.MustParseAddr(ip))
+			if err != nil || got != want {
+				t.Errorf("%s: got %+v, %v; want %+v", ip, got, err, want)
+			}
 		}
 	}
 }
@@ -39,16 +42,19 @@ func TestCountryLookup(t *testing.T) {
 func TestASNLookup(t *testing.T) {
 	h := mustLoadDB(t, dbASN, testDB(t, dbASN))
 	tests := map[string]asnResult{
-		ipGoogle:     {found: true, asn: 15169},
-		ipGoogleDE:   {found: true, asn: 15169},
-		ipHetzner:    {found: true, asn: 24940},
-		ipCloudflare: {found: true, asn: 13335},
+		ipGoogle:     {found: true, asn: 15169, varValue: "15169"},
+		ipGoogleDE:   {found: true, asn: 15169, varValue: "15169"},
+		ipHetzner:    {found: true, asn: 24940, varValue: "24940"},
+		ipCloudflare: {found: true, asn: 13335, varValue: "13335"},
 		ipUnknown:    {},
 	}
-	for ip, want := range tests {
-		got, err := h.lookupASN(netip.MustParseAddr(ip))
-		if err != nil || got != want {
-			t.Errorf("%s: got %+v, %v; want %+v", ip, got, err, want)
+	// The second round is served from the record cache.
+	for range 2 {
+		for ip, want := range tests {
+			got, err := h.lookupASN(netip.MustParseAddr(ip))
+			if err != nil || got != want {
+				t.Errorf("%s: got %+v, %v; want %+v", ip, got, err, want)
+			}
 		}
 	}
 }

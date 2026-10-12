@@ -30,8 +30,8 @@ type metrics struct {
 }
 
 type requestCounters struct {
-	decisions map[Action]prometheus.Counter
-	lookups   map[[2]string]prometheus.Counter
+	decisions [ActionDeny + 1]prometheus.Counter
+	lookups   [dbASN + 1][lookupError + 1]prometheus.Counter
 }
 
 func newMetrics(perHost bool) *metrics {
@@ -114,16 +114,13 @@ func (m *metrics) resolve() {
 // label value if given. All of them are created together, so the first deny
 // of a host is visible to increase() even if its first request was allowed.
 func (m *metrics) requestCounters(host ...string) *requestCounters {
-	c := &requestCounters{
-		decisions: make(map[Action]prometheus.Counter),
-		lookups:   make(map[[2]string]prometheus.Counter),
-	}
+	c := new(requestCounters)
 	for _, a := range []Action{ActionAllow, ActionDeny} {
 		c.decisions[a] = m.decisions.WithLabelValues(append([]string{a.String()}, host...)...)
 	}
-	for _, db := range []string{dbCountry.String(), dbASN.String()} {
-		for _, result := range []string{"hit", "miss", "error"} {
-			c.lookups[[2]string{db, result}] = m.lookups.WithLabelValues(append([]string{db, result}, host...)...)
+	for _, db := range []dbKind{dbCountry, dbASN} {
+		for _, result := range []lookupResult{lookupHit, lookupMiss, lookupError} {
+			c.lookups[db][result] = m.lookups.WithLabelValues(append([]string{db.String(), result.String()}, host...)...)
 		}
 	}
 	return c

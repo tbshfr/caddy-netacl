@@ -103,13 +103,14 @@ func (p *Policy) compile(app *App, logger *zap.Logger) (*engine, error) {
 }
 
 func (e *engine) evaluate(r *http.Request) Decision {
-	addr := clientAddr(r)
-	ls := requestLookupState(r, addr)
+	vars := requestVars(r)
+	addr := clientAddr(vars, r)
+	ls := requestLookupState(vars, addr)
 	c := e.metrics.forRequest(r)
-	d := e.rs.evaluate(ls, e.src, func(db string, addr netip.Addr, result string, err error) {
+	d := e.rs.evaluate(ls, e.src, func(db dbKind, addr netip.Addr, result lookupResult, err error) {
 		e.observeLookup(c, db, addr, result, err)
 	})
-	setDecisionVars(r, d, ls)
+	setDecisionVars(vars, e.rs, d, ls)
 	c.decisions[d.Action].Inc()
 	if ce := e.logger.Check(zapcore.DebugLevel, "netacl decision"); ce != nil {
 		client := addr.String()
@@ -123,17 +124,17 @@ func (e *engine) evaluate(r *http.Request) Decision {
 	return d
 }
 
-func (e *engine) observeLookup(c *requestCounters, db string, addr netip.Addr, result string, err error) {
-	c.lookups[[2]string{db, result}].Inc()
+func (e *engine) observeLookup(c *requestCounters, db dbKind, addr netip.Addr, result lookupResult, err error) {
+	c.lookups[db][result].Inc()
 	if err != nil {
 		if ok, suppressed := e.errLog.allow(time.Now()); ok {
 			e.logger.Error("database lookup failed; further failures within a minute are only counted in caddy_netacl_lookups_total",
-				zap.String("db", db), zap.Error(err), zap.Int64("suppressed_since_last", suppressed))
+				zap.Stringer("db", db), zap.Error(err), zap.Int64("suppressed_since_last", suppressed))
 		}
 		return
 	}
 	if ce := e.logger.Check(zapcore.DebugLevel, "database lookup"); ce != nil {
-		ce.Write(zap.String("db", db), zap.String("client_ip", addr.String()), zap.String("result", result))
+		ce.Write(zap.Stringer("db", db), zap.String("client_ip", addr.String()), zap.Stringer("result", result))
 	}
 }
 

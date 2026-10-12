@@ -3,9 +3,11 @@ package netacl
 import (
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"net/netip"
 	"testing"
 
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
 
@@ -51,15 +53,15 @@ func BenchmarkEvaluate(b *testing.B) {
 				}
 				// The random prefixes start at 11.0.0.0, so every rule is evaluated.
 				addr := netip.MustParseAddr(ipHetzner)
-				r := newRequest(ipHetzner)
+				vars := requestVars(newRequest(ipHetzner))
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
 					ls := &lookupState{addr: addr}
-					d := e.rs.evaluate(ls, e.src, func(db string, addr netip.Addr, result string, err error) {
+					d := e.rs.evaluate(ls, e.src, func(db dbKind, addr netip.Addr, result lookupResult, err error) {
 						e.observeLookup(e.metrics.all, db, addr, result, err)
 					})
-					setDecisionVars(r, d, ls)
+					setDecisionVars(vars, e.rs, d, ls)
 				}
 			})
 		}
@@ -101,6 +103,57 @@ func BenchmarkEvaluatePerHost(b *testing.B) {
 			b.ResetTimer()
 			for b.Loop() {
 				e.evaluate(r)
+			}
+		})
+	}
+}
+
+// BenchmarkEvaluateRequest covers the whole request path, including reading
+// client_ip and the geo lookups, over many distinct public addresses.
+func BenchmarkEvaluateRequest(b *testing.B) {
+	app, _ := newTestApp(b, &App{DBCountry: testDB(b, dbCountry), DBASN: testDB(b, dbASN)})
+	app.logger = zap.NewNop()
+	p := Policy{Rules: []Rule{
+		{Action: "deny", Selector: Selector{IPs: randomPrefixes(1000)}},
+		{Action: "deny", Selector: Selector{ASNs: []uint32{64496}}},
+		{Action: "allow", Selector: Selector{Countries: []string{"DE", "SE", "NO"}}},
+	}, Default: "deny"}
+	e, err := p.compile(app, zap.NewNop())
+	if err != nil {
+		b.Fatal(err)
+	}
+	rng := rand.New(rand.NewPCG(3, 4))
+	for _, v6 := range []bool{false, true} {
+		name := "ipv4"
+		if v6 {
+			name = "ipv6"
+		}
+		reqs := make([]*http.Request, 4096)
+		for i := range reqs {
+			var a netip.Addr
+			if v6 {
+				var b16 [16]byte
+				b16[0], b16[1] = 0x2a, byte(rng.IntN(16))
+				for j := 2; j < 8; j++ {
+					b16[j] = byte(rng.IntN(256))
+				}
+				a = netip.AddrFrom16(b16)
+			} else {
+				a = netip.AddrFrom4([4]byte{byte(1 + rng.IntN(223)), byte(rng.IntN(256)), byte(rng.IntN(256)), byte(rng.IntN(256))})
+			}
+			r := newRequest(a.String())
+			caddyhttp.SetVar(r.Context(), caddyhttp.ClientIPVarKey, a.String())
+			reqs[i] = r
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			i := 0
+			for b.Loop() {
+				r := reqs[i%len(reqs)]
+				// Each request starts without a cached lookup state.
+				delete(r.Context().Value(caddyhttp.VarsCtxKey).(map[string]any), lookupVarKey)
+				e.evaluate(r)
+				i++
 			}
 		})
 	}

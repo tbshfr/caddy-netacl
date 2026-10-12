@@ -300,6 +300,9 @@ type countryResult struct {
 type asnResult struct {
 	found bool
 	asn   uint32
+	// The netacl_asn var value, formatted and boxed once per cached record.
+	// Nil when the source did not set it.
+	varValue any
 }
 
 // lookupState is shared by all netacl instances on a request, so each
@@ -316,7 +319,35 @@ type lookupState struct {
 	asn     asnResult
 }
 
-type lookupObserver func(db string, addr netip.Addr, result string, err error)
+type lookupResult uint8
+
+const (
+	lookupHit lookupResult = iota
+	lookupMiss
+	lookupError
+)
+
+func (r lookupResult) String() string {
+	switch r {
+	case lookupHit:
+		return "hit"
+	case lookupMiss:
+		return "miss"
+	}
+	return "error"
+}
+
+func classifyLookup(found bool, err error) lookupResult {
+	switch {
+	case err != nil:
+		return lookupError
+	case !found:
+		return lookupMiss
+	}
+	return lookupHit
+}
+
+type lookupObserver func(db dbKind, addr netip.Addr, result lookupResult, err error)
 
 func (ls *lookupState) ensureCountry(src geoSource, obs lookupObserver) {
 	if ls.countryDone {
@@ -324,17 +355,10 @@ func (ls *lookupState) ensureCountry(src geoSource, obs lookupObserver) {
 	}
 	ls.countryDone = true
 	r, err := src.lookupCountry(ls.addr)
-	result := "hit"
-	switch {
-	case err != nil:
-		ls.countryErr = true
-		result = "error"
-	case !r.found:
-		result = "miss"
-	}
+	ls.countryErr = err != nil
 	ls.country = r
 	if obs != nil {
-		obs("country", ls.addr, result, err)
+		obs(dbCountry, ls.addr, classifyLookup(r.found, err), err)
 	}
 }
 
@@ -344,17 +368,10 @@ func (ls *lookupState) ensureASN(src geoSource, obs lookupObserver) {
 	}
 	ls.asnDone = true
 	r, err := src.lookupASN(ls.addr)
-	result := "hit"
-	switch {
-	case err != nil:
-		ls.asnErr = true
-		result = "error"
-	case !r.found:
-		result = "miss"
-	}
+	ls.asnErr = err != nil
 	ls.asn = r
 	if obs != nil {
-		obs("asn", ls.addr, result, err)
+		obs(dbASN, ls.addr, classifyLookup(r.found, err), err)
 	}
 }
 
@@ -414,6 +431,8 @@ func (m *matchSet) match(ls *lookupState, src geoSource, obs lookupObserver) (ma
 type compiledRule struct {
 	action Action
 	set    *matchSet
+	// The netacl_rule var value, boxed once instead of on every request.
+	varValue any
 }
 
 type ruleset struct {
@@ -496,7 +515,7 @@ func compileRules(rules []Rule, def string, groups groupResolver, files ipListSo
 		if err != nil {
 			return nil, fmt.Errorf("rule %d (%s): %w", i, r.Action, err)
 		}
-		rs.rules = append(rs.rules, compiledRule{action: action, set: set})
+		rs.rules = append(rs.rules, compiledRule{action: action, set: set, varValue: strconv.Itoa(i)})
 		rs.needs |= set.needs()
 	}
 	return rs, nil
