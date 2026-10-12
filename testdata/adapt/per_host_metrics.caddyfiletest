@@ -1,0 +1,70 @@
+{
+	netacl {
+		per_host_metrics
+	}
+}
+
+example.com, *.example.net {
+	netacl {
+		deny ip 192.0.2.0/24
+		default allow
+	}
+	respond "ok"
+}
+----------
+{
+	"apps": {
+		"http": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						":443"
+					],
+					"routes": [
+						{
+							"match": [
+								{
+									"host": [
+										"example.com",
+										"*.example.net"
+									]
+								}
+							],
+							"handle": [
+								{
+									"handler": "subroute",
+									"routes": [
+										{
+											"handle": [
+												{
+													"default": "allow",
+													"handler": "netacl",
+													"rules": [
+														{
+															"action": "deny",
+															"ips": [
+																"192.0.2.0/24"
+															]
+														}
+													]
+												},
+												{
+													"body": "ok",
+													"handler": "static_response"
+												}
+											]
+										}
+									]
+								}
+							],
+							"terminal": true
+						}
+					]
+				}
+			}
+		},
+		"netacl": {
+			"per_host_metrics": true
+		}
+	}
+}

@@ -105,9 +105,12 @@ func (p *Policy) compile(app *App, logger *zap.Logger) (*engine, error) {
 func (e *engine) evaluate(r *http.Request) Decision {
 	addr := clientAddr(r)
 	ls := requestLookupState(r, addr)
-	d := e.rs.evaluate(ls, e.src, e.observeLookup)
+	c := e.metrics.forRequest(r)
+	d := e.rs.evaluate(ls, e.src, func(db string, addr netip.Addr, result string, err error) {
+		e.observeLookup(c, db, addr, result, err)
+	})
 	setDecisionVars(r, d, ls)
-	e.metrics.decisionCounters[d.Action].Inc()
+	c.decisions[d.Action].Inc()
 	if ce := e.logger.Check(zapcore.DebugLevel, "netacl decision"); ce != nil {
 		client := addr.String()
 		if !addr.IsValid() {
@@ -120,8 +123,8 @@ func (e *engine) evaluate(r *http.Request) Decision {
 	return d
 }
 
-func (e *engine) observeLookup(db string, addr netip.Addr, result string, err error) {
-	e.metrics.lookupCounters[[2]string{db, result}].Inc()
+func (e *engine) observeLookup(c *requestCounters, db string, addr netip.Addr, result string, err error) {
+	c.lookups[[2]string{db, result}].Inc()
 	if err != nil {
 		if ok, suppressed := e.errLog.allow(time.Now()); ok {
 			e.logger.Error("database lookup failed; further failures within a minute are only counted in caddy_netacl_lookups_total",

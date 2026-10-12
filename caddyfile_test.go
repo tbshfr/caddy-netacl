@@ -75,6 +75,11 @@ func TestCaddyfileErrors(t *testing.T) {
 		db_city /x
 	}
 }`, `unrecognized netacl option "db_city", at Caddyfile:3`},
+		{"per_host_metrics with argument", `{
+	netacl {
+		per_host_metrics on
+	}
+}`, `wrong argument count or unexpected line ending after 'on', at Caddyfile:3`},
 		{"duplicate group", `{
 	netacl {
 		group a 192.0.2.1

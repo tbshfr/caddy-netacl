@@ -56,10 +56,52 @@ func BenchmarkEvaluate(b *testing.B) {
 				b.ResetTimer()
 				for b.Loop() {
 					ls := &lookupState{addr: addr}
-					d := e.rs.evaluate(ls, e.src, e.observeLookup)
+					d := e.rs.evaluate(ls, e.src, func(db string, addr netip.Addr, result string, err error) {
+						e.observeLookup(e.metrics.all, db, addr, result, err)
+					})
 					setDecisionVars(r, d, ls)
 				}
 			})
 		}
+	}
+}
+
+func BenchmarkEvaluatePerHost(b *testing.B) {
+	hosts := make([]string, 0, 1100)
+	for i := range 1000 {
+		hosts = append(hosts, fmt.Sprintf("site%d.example.com", i))
+	}
+	for i := range 100 {
+		hosts = append(hosts, fmt.Sprintf("*.zone%d.example.net", i))
+	}
+	for _, tc := range []struct {
+		name    string
+		perHost bool
+		host    string
+	}{
+		{"perHost=false", false, "site500.example.com"},
+		{"perHost=true/exact", true, "site500.example.com"},
+		{"perHost=true/wildcard", true, "a.zone99.example.net"},
+		{"perHost=true/other", true, "attacker.test"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			app, _ := newTestApp(b, &App{PerHostMetrics: tc.perHost})
+			app.logger = zap.NewNop()
+			app.metrics.listHosts = func() []string { return hosts }
+			p := Policy{Rules: []Rule{
+				{Action: "deny", Selector: Selector{IPs: randomPrefixes(1000)}},
+			}, Default: "allow"}
+			e, err := p.compile(app, zap.NewNop())
+			if err != nil {
+				b.Fatal(err)
+			}
+			r := newRequest(ipHetzner)
+			r.Host = tc.host
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				e.evaluate(r)
+			}
+		})
 	}
 }

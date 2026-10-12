@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +35,9 @@ type App struct {
 	// Zero disables reloading; otherwise at least one second.
 	ReloadInterval caddy.Duration      `json:"reload_interval,omitempty"`
 	Groups         map[string]Selector `json:"groups,omitempty"`
+	// Add a host label to the decision and lookup metrics. Hosts that no
+	// host matcher in the http app names are counted as "_other".
+	PerHostMetrics bool `json:"per_host_metrics,omitempty"`
 
 	ctx     caddy.Context
 	logger  *zap.Logger
@@ -73,7 +77,8 @@ func (a *App) Provision(ctx caddy.Context) error {
 	a.logger = ctx.Logger()
 	a.ipLists = make(map[string]*ipList)
 	a.managed = make(map[dbKind]bool)
-	a.metrics = newMetrics()
+	a.metrics = newMetrics(a.PerHostMetrics)
+	a.metrics.listHosts = a.configuredHosts
 	if err := a.metrics.register(ctx.GetMetricsRegistry()); err != nil {
 		return fmt.Errorf("registering metrics: %w", err)
 	}
@@ -169,7 +174,19 @@ func (a *App) logStart() {
 	a.logger.Info("started", append(fields,
 		zap.Int("groups", len(a.groups.flat)),
 		zap.Bool("auto_update", a.AutoUpdate),
+		zap.Bool("per_host_metrics", a.PerHostMetrics),
 		zap.Duration("reload_interval", time.Duration(a.ReloadInterval)))...)
+}
+
+// configuredHosts lists the hosts that get their own per-host metrics label.
+func (a *App) configuredHosts() []string {
+	httpApp, err := a.ctx.AppIfConfigured("http")
+	if err != nil {
+		return nil
+	}
+	hosts := routeHosts(httpApp.(*caddyhttp.App))
+	a.logger.Debug("per-host metrics", zap.Strings("hosts", hosts))
+	return hosts
 }
 
 // Caddy creates a new app on every config reload, so the old loops must not

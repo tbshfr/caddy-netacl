@@ -1,6 +1,7 @@
 package netacl
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -124,5 +125,67 @@ func TestIntegrationUntrustedForwardedFor(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(resp.Status, "403") {
 		t.Errorf("status %s", resp.Status)
+	}
+}
+
+func TestIntegrationPerHostMetrics(t *testing.T) {
+	tester := caddytest.NewTester(t)
+	tester.InitServer(`
+	{
+		skip_install_trust
+		admin localhost:2999
+		http_port 9080
+		https_port 9443
+		grace_period 1ns
+		netacl {
+			per_host_metrics
+		}
+	}
+
+	http://localhost:9080, http://127.0.0.1:9080 {
+		netacl {
+			deny ip 127.0.0.1
+			default allow
+		}
+		respond "ok"
+	}
+
+	http://:9080 {
+		netacl {
+			deny ip 127.0.0.1
+			default allow
+		}
+		respond "ok"
+	}
+	`, "caddyfile")
+
+	for _, host := range []string{"localhost:9080", "127.0.0.1:9080", "attacker.test"} {
+		req, err := http.NewRequest(http.MethodGet, "http://localhost:9080/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp := tester.AssertResponseCode(req, 403)
+		resp.Body.Close()
+	}
+
+	resp, err := tester.Client.Get("http://localhost:2999/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)
+	for _, want := range []string{
+		`caddy_netacl_decisions_total{decision="deny",host="localhost"} 1`,
+		`caddy_netacl_decisions_total{decision="deny",host="127.0.0.1"} 1`,
+		`caddy_netacl_decisions_total{decision="deny",host="_other"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %s", want)
+		}
 	}
 }

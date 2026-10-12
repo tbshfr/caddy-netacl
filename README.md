@@ -61,6 +61,7 @@ global block at all.
 		db_country      <path>       # your own country (or city) MMDB
 		db_asn          <path>       # your own ASN MMDB
 		reload_interval <duration>   # re-read changed files; default off, minimum 1s
+		per_host_metrics             # add a host label to request metrics
 		group <name> <selectors...>
 		group <name> <selectors...> {
 			<selectors...>
@@ -367,11 +368,34 @@ With `metrics` enabled in Caddy:
 
 | Metric | Labels |
 |---|---|
-| `caddy_netacl_decisions_total` | `decision` |
-| `caddy_netacl_lookups_total` | `db` (`country`, `asn`), `result` (`hit`, `miss`, `error`) |
+| `caddy_netacl_decisions_total` | `decision`, `host` with `per_host_metrics` |
+| `caddy_netacl_lookups_total` | `db` (`country`, `asn`), `result` (`hit`, `miss`, `error`), `host` with `per_host_metrics` |
 | `caddy_netacl_db_reloads_total` | `db` (`country`, `asn`, `ip_file`), `result` (`success`, `error`) |
 | `caddy_netacl_db_downloads_total` | `db` (`country`, `asn`), `result` (`success`, `error`) |
 | `caddy_netacl_db_build_epoch_seconds` | `db`: alert on this to catch stale databases |
+
+#### Per-host metrics
+
+Add `per_host_metrics` to the global `netacl` options to break decisions and
+lookups down by host:
+
+```caddyfile
+{
+	netacl {
+		per_host_metrics
+	}
+}
+```
+
+The `host` label is the Host header without the port, if a site address or
+host matcher names it. Hosts matching a wildcard site such as `*.example.com`
+are labelled `*.example.com`, and all others `_other`, so clients cannot create
+unlimited series. The label depends only on the Host header, not on which site
+handled the request.
+
+Each host adds 8 series (2 for decisions, 6 for lookups). They are only
+created once netacl handles a request for that host, so hosts that never use
+netacl add none.
 
 A Grafana dashboard for these metrics is in [`grafana/`](grafana/).
 

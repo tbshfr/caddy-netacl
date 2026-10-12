@@ -21,10 +21,18 @@ necessary for faster scrapes and leaves gaps for slower ones.
 | Row | Shows |
 |---|---|
 | Decisions | Evaluations per second, deny ratio and allow/deny totals over the selected range; decisions over time; deny ratio per instance |
+| Hosts | Denied requests per second and deny ratio per host; allowed, denied and deny ratio per host over the selected range |
 | Database lookups | Lookups per second by database and result, hit ratio, lookup errors |
 | Databases | Age and build date of the loaded databases, reload and download errors, reloads and `auto_update` downloads over time |
 
-The `job` and `instance` variables filter every panel.
+The `job` and `instance` variables filter every panel. The `host` variable
+filters the decision and lookup panels.
+
+The Hosts row and the `host` variable need
+[`per_host_metrics`](../README.md#per-host-metrics) in the global `netacl`
+options. Without it, the Hosts row shows a single unlabelled series and the
+`host` variable has no values; the rest of the dashboard works either way.
+Requests to hosts that no host matcher names are shown as `_other`.
 
 Totals and ratios in the stat panels cover the selected time range. Graphs
 show per-second rates, so at low traffic most points are small fractions,

@@ -60,6 +60,12 @@ func parseGlobalOption(d *caddyfile.Dispenser, existing any) (any, error) {
 			}
 			app.AutoUpdate = true
 
+		case "per_host_metrics":
+			if d.NextArg() {
+				return nil, d.ArgErr()
+			}
+			app.PerHostMetrics = true
+
 		case "reload_interval":
 			if app.ReloadInterval != 0 {
 				return nil, d.Err("reload_interval specified more than once")
