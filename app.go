@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,10 @@ type App struct {
 	// Add a host label to the decision and lookup metrics. Hosts that no
 	// host matcher in the http app names are counted as "_other".
 	PerHostMetrics bool `json:"per_host_metrics,omitempty"`
+	// Base URL for list selectors: list github/hooks fetches
+	// <lists_url>/github/hooks.txt. Defaults to the lists published in the
+	// caddy-netacl repository. Lists are only downloaded if a rule uses them.
+	ListsURL string `json:"lists_url,omitempty"`
 
 	ctx     caddy.Context
 	logger  *zap.Logger
@@ -48,7 +53,10 @@ type App struct {
 	country *dbHolder
 	asn     *dbHolder
 	ipLists map[string]*ipList
+	lists   map[string]*remoteList
 	managed map[dbKind]bool
+
+	listsDir string
 
 	lookupErrLog logThrottle
 
@@ -57,6 +65,10 @@ type App struct {
 	dbipURL     string
 	now         func() time.Time
 	updateEvery time.Duration
+	// How often lists are due for a check, and how often due lists are
+	// looked for, so a failed check is retried without waiting a full day.
+	listRefresh    time.Duration
+	listCheckEvery time.Duration
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -76,6 +88,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 	a.ctx = ctx
 	a.logger = ctx.Logger()
 	a.ipLists = make(map[string]*ipList)
+	a.lists = make(map[string]*remoteList)
 	a.managed = make(map[dbKind]bool)
 	a.metrics = newMetrics(a.PerHostMetrics)
 	a.metrics.listHosts = a.configuredHosts
@@ -103,10 +116,25 @@ func (a *App) Provision(ctx caddy.Context) error {
 		// times a day picks it up the same day without hammering DB-IP.
 		a.updateEvery = 6 * time.Hour
 	}
+	if a.listRefresh == 0 {
+		// The published lists change at most weekly.
+		a.listRefresh = 24 * time.Hour
+	}
+	if a.listCheckEvery == 0 {
+		a.listCheckEvery = time.Hour
+	}
 
 	repl := caddy.NewReplacer()
 	a.DBCountry = repl.ReplaceKnown(a.DBCountry, "")
 	a.DBASN = repl.ReplaceKnown(a.DBASN, "")
+	a.ListsURL = strings.TrimRight(repl.ReplaceKnown(a.ListsURL, ""), "/")
+	if a.ListsURL == "" {
+		a.ListsURL = defaultListsURL
+	}
+	if err := validateListsURL(a.ListsURL); err != nil {
+		return err
+	}
+	a.listsDir = listsCacheDir(caddy.AppDataDir(), a.ListsURL)
 	if a.AutoUpdate {
 		dir := filepath.Join(caddy.AppDataDir(), "netacl")
 		if a.DBCountry == "" {
@@ -153,6 +181,12 @@ func (a *App) Start() error {
 	if len(a.managed) > 0 {
 		a.wg.Go(func() { a.updateLoop(ctx) })
 	}
+	a.mu.Lock()
+	hasLists := len(a.lists) > 0
+	a.mu.Unlock()
+	if hasLists {
+		a.wg.Go(func() { a.listLoop(ctx) })
+	}
 	a.logStart()
 	return nil
 }
@@ -169,6 +203,10 @@ func (a *App) logStart() {
 		zap.String("db_country", inUse(a.country)),
 		zap.String("db_asn", inUse(a.asn)),
 		zap.Int("ip_files", len(a.ipLists)),
+		zap.Int("lists", len(a.lists)),
+	}
+	if len(a.lists) > 0 {
+		fields = append(fields, zap.String("lists_url", a.ListsURL))
 	}
 	a.mu.Unlock()
 	a.logger.Info("started", append(fields,

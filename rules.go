@@ -54,7 +54,10 @@ type Selector struct {
 	IPs    []string `json:"ips,omitempty"`
 	// Files with one IP or CIDR per line; blank lines and text after # are
 	// ignored. They are re-read on the app's reload_interval.
-	IPFiles       []string `json:"ip_files,omitempty"`
+	IPFiles []string `json:"ip_files,omitempty"`
+	// Published lists such as github/hooks, fetched from the app's
+	// lists_url and kept current.
+	Lists         []string `json:"lists,omitempty"`
 	PrivateRanges bool     `json:"private_ranges,omitempty"`
 	ASNs          []uint32 `json:"asns,omitempty"`
 	// ISO 3166-1 alpha-2 codes, or UNK.
@@ -64,7 +67,7 @@ type Selector struct {
 }
 
 func (s Selector) isEmpty() bool {
-	return len(s.Groups) == 0 && len(s.IPs) == 0 && len(s.IPFiles) == 0 &&
+	return len(s.Groups) == 0 && len(s.IPs) == 0 && len(s.IPFiles) == 0 && len(s.Lists) == 0 &&
 		!s.PrivateRanges && len(s.ASNs) == 0 && len(s.Countries) == 0 && len(s.Continents) == 0
 }
 
@@ -77,6 +80,7 @@ type Rule struct {
 type spec struct {
 	prefixes   []netip.Prefix
 	ipFiles    []string
+	lists      []string
 	asns       []uint32
 	countries  []string
 	continents []string
@@ -85,6 +89,7 @@ type spec struct {
 func (s *spec) merge(o *spec) {
 	s.prefixes = append(s.prefixes, o.prefixes...)
 	s.ipFiles = append(s.ipFiles, o.ipFiles...)
+	s.lists = append(s.lists, o.lists...)
 	s.asns = append(s.asns, o.asns...)
 	s.countries = append(s.countries, o.countries...)
 	s.continents = append(s.continents, o.continents...)
@@ -113,6 +118,12 @@ func parseSpec(sel Selector) (*spec, []string, error) {
 			return nil, nil, errors.New("empty ip_file path")
 		}
 		sp.ipFiles = append(sp.ipFiles, f)
+	}
+	for _, l := range sel.Lists {
+		if err := validateListName(l); err != nil {
+			return nil, nil, err
+		}
+		sp.lists = append(sp.lists, l)
 	}
 	for _, a := range sel.ASNs {
 		if a == 0 {
@@ -215,7 +226,8 @@ const (
 )
 
 type matchSet struct {
-	prefixes   *bart.Lite
+	prefixes *bart.Lite
+	// Both ip_file and list selectors.
 	ipFiles    []*ipList
 	asns       map[uint32]struct{}
 	countries  map[string]struct{}
@@ -224,7 +236,7 @@ type matchSet struct {
 
 type ipListSource func(path string) (*ipList, error)
 
-func compileSet(sp *spec, files ipListSource) (*matchSet, error) {
+func compileSet(sp *spec, files, lists ipListSource) (*matchSet, error) {
 	m := new(matchSet)
 	if len(sp.prefixes) > 0 {
 		m.prefixes = new(bart.Lite)
@@ -234,6 +246,15 @@ func compileSet(sp *spec, files ipListSource) (*matchSet, error) {
 	}
 	for _, path := range sp.ipFiles {
 		l, err := files(path)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(m.ipFiles, l) {
+			m.ipFiles = append(m.ipFiles, l)
+		}
+	}
+	for _, name := range sp.lists {
+		l, err := lists(name)
 		if err != nil {
 			return nil, err
 		}
@@ -483,7 +504,7 @@ func (rs *ruleset) evaluate(ls *lookupState, src geoSource, obs lookupObserver) 
 
 type groupResolver func(name string) (*spec, error)
 
-func compileRules(rules []Rule, def string, groups groupResolver, files ipListSource) (*ruleset, error) {
+func compileRules(rules []Rule, def string, groups groupResolver, files, lists ipListSource) (*ruleset, error) {
 	if def == "" {
 		return nil, errors.New("missing default: add 'default allow' or 'default deny'")
 	}
@@ -511,7 +532,7 @@ func compileRules(rules []Rule, def string, groups groupResolver, files ipListSo
 			}
 			sp.merge(gs)
 		}
-		set, err := compileSet(sp, files)
+		set, err := compileSet(sp, files, lists)
 		if err != nil {
 			return nil, fmt.Errorf("rule %d (%s): %w", i, r.Action, err)
 		}
@@ -521,9 +542,9 @@ func compileRules(rules []Rule, def string, groups groupResolver, files ipListSo
 	return rs, nil
 }
 
-// shadowedRules returns rules that earlier rules fully cover. ip_file
-// contents change at runtime, so an ip_file only counts as covered when the
-// same file appears in an earlier rule.
+// shadowedRules returns rules that earlier rules fully cover. ip_file and list
+// contents change at runtime, so they only count as covered when the same
+// file or list appears in an earlier rule.
 func (rs *ruleset) shadowedRules() []int {
 	var shadowed []int
 	seen := &matchSet{prefixes: new(bart.Lite), asns: map[uint32]struct{}{},

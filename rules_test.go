@@ -75,7 +75,7 @@ func mustCompile(t *testing.T, groups map[string]Selector, rules []Rule, def str
 	if err != nil {
 		t.Fatalf("resolveGroups: %v", err)
 	}
-	rs, err := compileRules(rules, def, gs.lookup, noFiles)
+	rs, err := compileRules(rules, def, gs.lookup, noFiles, noFiles)
 	if err != nil {
 		t.Fatalf("compileRules: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestIPFileSelector(t *testing.T) {
 
 	rs, err := compileRules([]Rule{
 		{Action: "deny", Selector: Selector{IPFiles: []string{path}}},
-	}, "allow", (*groupSet)(nil).lookup, files)
+	}, "allow", (*groupSet)(nil).lookup, files, noFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestCompileErrors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := compileRules(tc.rules, tc.def, gs.lookup, noFiles)
+			_, err := compileRules(tc.rules, tc.def, gs.lookup, noFiles, noFiles)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("got %v, want error containing %q", err, tc.want)
 			}

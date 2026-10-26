@@ -232,6 +232,34 @@ func TestCaddyfileErrors(t *testing.T) {
 		default allow
 	}
 }`, `invalid ASN 0`},
+		{"bad list name", `{
+	netacl {
+		group gh list GitHub/hooks
+	}
+}`, `invalid list name "GitHub/hooks"`},
+		{"list path traversal", `:80 {
+	netacl {
+		allow list github/../../etc
+		default deny
+	}
+}`, `invalid list name "github/../../etc"`},
+		{"list without name", `:80 {
+	netacl {
+		allow list
+		default deny
+	}
+}`, `'list' needs at least one value`},
+		{"lists_url twice", `{
+	netacl {
+		lists_url https://example.com/a
+		lists_url https://example.com/b
+	}
+}`, `lists_url specified more than once`},
+		{"lists_url without value", `{
+	netacl {
+		lists_url
+	}
+}`, `wrong argument count`},
 		{"directive argument", `:80 {
 	netacl deny
 }`, `unexpected argument "deny"`},

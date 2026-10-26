@@ -80,7 +80,7 @@ func (p *Policy) compile(app *App, logger *zap.Logger) (*engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	rs, err := compileRules(p.Rules, p.Default, app.groups.lookup, app.ipList)
+	rs, err := compileRules(p.Rules, p.Default, app.groups.lookup, app.ipList, app.remoteList)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +148,9 @@ func describeRule(r Rule) string {
 	}
 	for _, f := range r.IPFiles {
 		parts = append(parts, "ip_file "+f)
+	}
+	if len(r.Lists) > 0 {
+		parts = append(parts, "list "+strings.Join(r.Lists, " "))
 	}
 	if r.PrivateRanges {
 		parts = append(parts, "private_ranges")

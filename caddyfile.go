@@ -60,6 +60,18 @@ func parseGlobalOption(d *caddyfile.Dispenser, existing any) (any, error) {
 			}
 			app.AutoUpdate = true
 
+		case "lists_url":
+			if app.ListsURL != "" {
+				return nil, d.Err("lists_url specified more than once")
+			}
+			if !d.NextArg() {
+				return nil, d.ArgErr()
+			}
+			app.ListsURL = d.Val()
+			if d.NextArg() {
+				return nil, d.ArgErr()
+			}
+
 		case "per_host_metrics":
 			if d.NextArg() {
 				return nil, d.ArgErr()
@@ -275,7 +287,7 @@ func parsePolicyBlock(d *caddyfile.Dispenser, p *Policy, allowStatus bool) (int,
 	return status, nil
 }
 
-const selectorKeywords = "ip, ip_file, private_ranges, asn, country, continent"
+const selectorKeywords = "ip, ip_file, list, private_ranges, asn, country, continent"
 
 // selectorParser is fed one token at a time, so errors point at the
 // offending token.
@@ -302,7 +314,7 @@ func (p *selectorParser) feed(d *caddyfile.Dispenser) error {
 		return nil
 	}
 	switch tok {
-	case "ip", "ip_file", "asn", "country", "continent", "private_ranges":
+	case "ip", "ip_file", "list", "asn", "country", "continent", "private_ranges":
 		if p.pending != "" {
 			return d.Errf("'%s' needs at least one value before '%s'", p.pending, tok)
 		}
@@ -329,6 +341,11 @@ func (p *selectorParser) feed(d *caddyfile.Dispenser) error {
 		p.sel.IPs = append(p.sel.IPs, tok)
 	case "ip_file":
 		p.sel.IPFiles = append(p.sel.IPFiles, tok)
+	case "list":
+		if err := validateListName(tok); err != nil {
+			return d.Err(err.Error())
+		}
+		p.sel.Lists = append(p.sel.Lists, tok)
 	case "asn":
 		n, err := ParseASN(tok)
 		if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"sync/atomic"
@@ -39,8 +40,19 @@ func loadIPList(path string) (*ipListData, error) {
 	if st.IsDir() {
 		return nil, fmt.Errorf("ip_file %s: is a directory", path)
 	}
-	d := &ipListData{table: new(bart.Lite), stat: st}
-	sc := bufio.NewScanner(f)
+	d, err := parseIPList(f, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ip_file %w", err)
+	}
+	d.stat = st
+	return d, nil
+}
+
+// parseIPList reads one IP or CIDR per line. Errors start with name and the
+// line number. check, if set, can reject individual prefixes.
+func parseIPList(r io.Reader, name string, check func(netip.Prefix) error) (*ipListData, error) {
+	d := &ipListData{table: new(bart.Lite)}
+	sc := bufio.NewScanner(r)
 	line := 0
 	for sc.Scan() {
 		line++
@@ -53,14 +65,17 @@ func loadIPList(path string) (*ipListData, error) {
 			continue
 		}
 		p, err := ParsePrefix(string(b))
+		if err == nil && check != nil {
+			err = check(p)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("ip_file %s:%d: %w", path, line, err)
+			return nil, fmt.Errorf("%s:%d: %w", name, line, err)
 		}
 		d.table.Insert(p)
 		d.count++
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("ip_file %s:%d: %w", path, line+1, err)
+		return nil, fmt.Errorf("%s:%d: %w", name, line+1, err)
 	}
 	return d, nil
 }

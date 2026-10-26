@@ -27,7 +27,7 @@ func TestMetricsExportedAtZero(t *testing.T) {
 				"decisions": {m.decisions, decisions},
 				"lookups":   {m.lookups, lookups},
 				"reloads":   {m.reloads, 6},
-				"downloads": {m.downloads, 4},
+				"downloads": {m.downloads, 6},
 				"buildTime": {m.buildTime, 0}, // a 0 build time would read as a 56-year-old database
 			} {
 				if got := testutil.CollectAndCount(tc.c); got != tc.want {

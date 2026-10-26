@@ -57,7 +57,7 @@ func newMetrics(perHost bool) *metrics {
 		}, []string{"db", "result"}),
 		downloads: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: ns, Subsystem: sub, Name: "db_downloads_total",
-			Help: "Number of auto_update downloads by database and result (success, error).",
+			Help: "Number of auto_update database and list downloads by database (country, asn, list) and result (success, error).",
 		}, []string{"db", "result"}),
 		buildTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns, Subsystem: sub, Name: "db_build_epoch_seconds",
@@ -107,6 +107,7 @@ func (m *metrics) resolve() {
 			m.downloads.WithLabelValues(db, result)
 		}
 		m.reloads.WithLabelValues("ip_file", result)
+		m.downloads.WithLabelValues("list", result)
 	}
 }
 

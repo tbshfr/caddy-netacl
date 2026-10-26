@@ -20,6 +20,7 @@ plugin to set up.
 		group badhosts asn 12345 67890
 		group friendly country DE SE NO
 		group blocklist ip_file /etc/netacl/blocklist.txt
+		group github   list github/hooks
 	}
 }
 
@@ -62,6 +63,7 @@ global block at all.
 		db_asn          <path>       # your own ASN MMDB
 		reload_interval <duration>   # re-read changed files; default off, minimum 1s
 		per_host_metrics             # add a host label to request metrics
+		lists_url       <https-url>  # where list selectors are fetched; default: this repository
 		group <name> <selectors...>
 		group <name> <selectors...> {
 			<selectors...>
@@ -166,6 +168,7 @@ default  := default (allow | deny)         # required, exactly once, last
 selector := @group
           | ip <ip-or-cidr>...
           | ip_file <path>...
+          | list <name>...
           | private_ranges
           | asn <number>...
           | country <ISO 3166-1 alpha-2 | UNK>...
@@ -180,6 +183,8 @@ selector := @group
 - `ip_file` reads one IP or CIDR per line. Blank lines and text after `#` are
   ignored. An invalid line is a config error that names the file and line
   number.
+- `list` uses a published, automatically updated list such as `github/hooks`,
+  see [Lists](#lists).
 
 ## Semantics
 
@@ -324,9 +329,50 @@ Without `reload_interval`, changes take effect on `caddy reload`.
 | Database managed by `auto_update` | No, downloads are swapped in directly |
 | Your own `db_country` / `db_asn`, even alongside `auto_update` | Yes |
 | `ip_file` | Yes |
+| `list` | No, updates are swapped in directly |
 
 For a frequently updated `ip_file` blocklist, use a short interval such as
 `1m`. The minimum is `1s`. Checking costs one `stat` per file per interval.
+
+## Lists
+
+The `list` selector matches the address ranges of a third-party service, such
+as GitHub's webhook senders. The lists are published in this repository and
+kept current automatically. A list is only downloaded if a rule uses it.
+
+```caddyfile
+{
+	netacl {
+		group github list github/hooks
+	}
+}
+
+hooks.example.com {
+	netacl {
+		allow @github
+		default deny
+	}
+	reverse_proxy localhost:3000
+}
+```
+
+A list works for both `allow` and `deny`. The rule decides what a match does.
+
+To use lists from your own fork or server instead, set `lists_url`:
+
+```caddyfile
+{
+	netacl {
+		lists_url https://raw.githubusercontent.com/you/caddy-netacl/main/lists
+	}
+}
+```
+
+Whoever controls `lists_url` decides which addresses your `allow` rules let
+in, so only point it at a source you trust.
+
+The available lists, how they are downloaded and updated, and how to publish
+your own are described in [`lists/README.md`](lists/README.md).
 
 ## Observability
 
@@ -356,8 +402,9 @@ queried, and its var stays empty.
 
 Each time a config loads, netacl logs `started` at `info`. The line lists
 the database files in use (`unused` for one no rule needs), the number of
-`ip_file` lists and groups, and whether `auto_update` and `reload_interval`
-are on. Database downloads, loads and reloads, and `ip_file` loads and reloads, are
+`ip_file` files, lists and groups, `lists_url` if a list is used, and whether
+`auto_update` and `reload_interval` are on. Database downloads, loads and
+reloads, `ip_file` loads and reloads, and list downloads and updates are
 logged at `info`. Failures are logged at `error`. Per-request decisions and
 lookups are logged at `debug` only, so client IPs do not appear in normal
 logs.
@@ -371,7 +418,7 @@ With `metrics` enabled in Caddy:
 | `caddy_netacl_decisions_total` | `decision`, `host` with `per_host_metrics` |
 | `caddy_netacl_lookups_total` | `db` (`country`, `asn`), `result` (`hit`, `miss`, `error`), `host` with `per_host_metrics` |
 | `caddy_netacl_db_reloads_total` | `db` (`country`, `asn`, `ip_file`), `result` (`success`, `error`) |
-| `caddy_netacl_db_downloads_total` | `db` (`country`, `asn`), `result` (`success`, `error`) |
+| `caddy_netacl_db_downloads_total` | `db` (`country`, `asn`, `list`), `result` (`success`, `error`) |
 | `caddy_netacl_db_build_epoch_seconds` | `db`: alert on this to catch stale databases |
 
 #### Per-host metrics
