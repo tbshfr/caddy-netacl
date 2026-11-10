@@ -24,6 +24,7 @@ necessary for faster scrapes and leaves gaps for slower ones.
 | Hosts | Denied requests per second and deny ratio per host; allowed, denied and deny ratio per host over the selected range |
 | Database lookups | Lookups per second by database and result, hit ratio, lookup errors |
 | Databases | Age and build date of the loaded databases, reload and download errors, reloads and `auto_update` downloads over time |
+| Lists | Time since each [list](../README.md#lists) was last checked, on the stalest instance and per instance |
 
 The `job` and `instance` variables filter every panel. The `host` variable
 filters the decision and lookup panels.
@@ -41,3 +42,8 @@ and the deny ratio graph has gaps wherever a window saw no requests.
 Database age turns orange after 35 days and red after 45, which suits the
 monthly DB-IP Lite release that `auto_update` fetches. If you load GeoLite2
 files yourself (updated twice a week), lower the thresholds in the panel.
+
+List check age turns orange after 26 hours and red after 48. Lists are
+checked once a day and retried hourly when a check fails, so an age past
+about 25 hours means updates are failing and the loaded copy is going stale.
+The Lists row is empty when no rule uses a `list` selector.
