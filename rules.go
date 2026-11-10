@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/gaissmai/bart"
@@ -84,6 +85,27 @@ type spec struct {
 	asns       []uint32
 	countries  []string
 	continents []string
+
+	tableOnce sync.Once
+	table     *bart.Lite
+}
+
+func newPrefixTable(prefixes []netip.Prefix) *bart.Lite {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	t := new(bart.Lite)
+	for _, p := range prefixes {
+		t.Insert(p)
+	}
+	return t
+}
+
+// Shared by every rule that is a single group reference, so it must not be
+// modified.
+func (s *spec) prefixTable() *bart.Lite {
+	s.tableOnce.Do(func() { s.table = newPrefixTable(s.prefixes) })
+	return s.table
 }
 
 func (s *spec) merge(o *spec) {
@@ -230,19 +252,64 @@ type matchSet struct {
 	// Both ip_file and list selectors.
 	ipFiles    []*ipList
 	asns       map[uint32]struct{}
-	countries  map[string]struct{}
-	continents map[string]struct{}
+	countries  codeSet
+	continents codeSet
+}
+
+// A bitmap rather than a map, because every country rule tests it on every
+// request.
+type codeSet struct {
+	bits     [(26*26 + 63) / 64]uint64
+	unknown  bool
+	nonEmpty bool
+}
+
+func codeIndex(s string) (int, bool) {
+	if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
+		return int(s[0]-'A')*26 + int(s[1]-'A'), true
+	}
+	return 0, false
+}
+
+// add expects a code that ParseCountry or ParseContinent returned.
+func (c *codeSet) add(code string) {
+	if i, ok := codeIndex(code); ok {
+		c.bits[i/64] |= 1 << (i % 64)
+	} else {
+		c.unknown = true
+	}
+	c.nonEmpty = true
+}
+
+func (c *codeSet) has(code string) bool {
+	i, ok := codeIndex(code)
+	return ok && c.bits[i/64]&(1<<(i%64)) != 0
+}
+
+func (c *codeSet) addAll(o *codeSet) {
+	for i, b := range o.bits {
+		c.bits[i] |= b
+	}
+	c.unknown = c.unknown || o.unknown
+	c.nonEmpty = c.nonEmpty || o.nonEmpty
+}
+
+func (c *codeSet) covers(o *codeSet) bool {
+	for i, b := range o.bits {
+		if b&^c.bits[i] != 0 {
+			return false
+		}
+	}
+	return c.unknown || !o.unknown
 }
 
 type ipListSource func(path string) (*ipList, error)
 
-func compileSet(sp *spec, files, lists ipListSource) (*matchSet, error) {
-	m := new(matchSet)
-	if len(sp.prefixes) > 0 {
-		m.prefixes = new(bart.Lite)
-		for _, p := range sp.prefixes {
-			m.prefixes.Insert(p)
-		}
+// shared, if set, is a table that already holds exactly sp's prefixes.
+func compileSet(sp *spec, shared *bart.Lite, files, lists ipListSource) (*matchSet, error) {
+	m := &matchSet{prefixes: shared}
+	if m.prefixes == nil {
+		m.prefixes = newPrefixTable(sp.prefixes)
 	}
 	for _, path := range sp.ipFiles {
 		l, err := files(path)
@@ -268,24 +335,18 @@ func compileSet(sp *spec, files, lists ipListSource) (*matchSet, error) {
 			m.asns[a] = struct{}{}
 		}
 	}
-	if len(sp.countries) > 0 {
-		m.countries = make(map[string]struct{}, len(sp.countries))
-		for _, c := range sp.countries {
-			m.countries[c] = struct{}{}
-		}
+	for _, c := range sp.countries {
+		m.countries.add(c)
 	}
-	if len(sp.continents) > 0 {
-		m.continents = make(map[string]struct{}, len(sp.continents))
-		for _, c := range sp.continents {
-			m.continents[c] = struct{}{}
-		}
+	for _, c := range sp.continents {
+		m.continents.add(c)
 	}
 	return m, nil
 }
 
 func (m *matchSet) needs() need {
 	var n need
-	if len(m.countries) > 0 || len(m.continents) > 0 {
+	if m.countries.nonEmpty || m.continents.nonEmpty {
 		n |= needCountry
 	}
 	if len(m.asns) > 0 {
@@ -416,23 +477,21 @@ func (m *matchSet) match(ls *lookupState, src geoSource, obs lookupObserver) (ma
 	if !geoEligible(addr) {
 		return false, false
 	}
-	if len(m.countries) > 0 || len(m.continents) > 0 {
+	if m.countries.nonEmpty || m.continents.nonEmpty {
 		ls.ensureCountry(src, obs)
 		if ls.countryErr {
 			lookupFailed = true
 		} else {
-			c := ls.country
+			c := &ls.country
 			if c.found {
-				if _, ok := m.countries[c.country]; ok {
+				if m.countries.has(c.country) {
 					return true, false
 				}
-			} else if _, ok := m.countries[UnknownCountry]; ok {
+			} else if m.countries.unknown {
 				return true, false
 			}
-			if c.continent != "" {
-				if _, ok := m.continents[c.continent]; ok {
-					return true, false
-				}
+			if m.continents.has(c.continent) {
+				return true, false
 			}
 		}
 	}
@@ -534,14 +593,19 @@ func compileRules(rules []Rule, def string, groups groupResolver, files, lists i
 		if err != nil {
 			return nil, fmt.Errorf("rule %d (%s): %w", i, r.Action, err)
 		}
+		ownPrefixes := len(sp.prefixes)
+		var shared *bart.Lite
 		for _, g := range refs {
 			gs, err := groups(g)
 			if err != nil {
 				return nil, fmt.Errorf("rule %d (%s): %w", i, r.Action, err)
 			}
 			sp.merge(gs)
+			if ownPrefixes == 0 && len(refs) == 1 {
+				shared = gs.prefixTable()
+			}
 		}
-		set, err := compileSet(sp, files, lists)
+		set, err := compileSet(sp, shared, files, lists)
 		if err != nil {
 			return nil, fmt.Errorf("rule %d (%s): %w", i, r.Action, err)
 		}
@@ -556,8 +620,7 @@ func compileRules(rules []Rule, def string, groups groupResolver, files, lists i
 // file or list appears in an earlier rule.
 func (rs *ruleset) shadowedRules() []int {
 	var shadowed []int
-	seen := &matchSet{prefixes: new(bart.Lite), asns: map[uint32]struct{}{},
-		countries: map[string]struct{}{}, continents: map[string]struct{}{}}
+	seen := &matchSet{prefixes: new(bart.Lite), asns: map[uint32]struct{}{}}
 	for i, r := range rs.rules {
 		if i > 0 && covers(seen, r.set) {
 			shadowed = append(shadowed, i)
@@ -573,12 +636,8 @@ func (rs *ruleset) shadowedRules() []int {
 		for k := range r.set.asns {
 			seen.asns[k] = struct{}{}
 		}
-		for k := range r.set.countries {
-			seen.countries[k] = struct{}{}
-		}
-		for k := range r.set.continents {
-			seen.continents[k] = struct{}{}
-		}
+		seen.countries.addAll(&r.set.countries)
+		seen.continents.addAll(&r.set.continents)
 	}
 	return shadowed
 }
@@ -601,15 +660,5 @@ func covers(seen, m *matchSet) bool {
 			return false
 		}
 	}
-	for k := range m.countries {
-		if _, ok := seen.countries[k]; !ok {
-			return false
-		}
-	}
-	for k := range m.continents {
-		if _, ok := seen.continents[k]; !ok {
-			return false
-		}
-	}
-	return true
+	return seen.countries.covers(&m.countries) && seen.continents.covers(&m.continents)
 }

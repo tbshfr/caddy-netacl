@@ -89,8 +89,8 @@ var (
 )
 
 func codeVar(s string) any {
-	if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
-		return codeVars[int(s[0]-'A')*26+int(s[1]-'A')]
+	if i, ok := codeIndex(s); ok {
+		return codeVars[i]
 	}
 	return s
 }

@@ -5,9 +5,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gaissmai/bart"
 )
 
 type fakeGeo struct {
@@ -446,5 +449,71 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCodeSet(t *testing.T) {
+	var s codeSet
+	if s.nonEmpty || s.has("DE") || s.has("") || s.has(UnknownCountry) {
+		t.Error("empty set matches")
+	}
+	for _, c := range []string{"AA", "DE", "ZZ", UnknownCountry} {
+		s.add(c)
+	}
+	for _, c := range []string{"AA", "DE", "ZZ"} {
+		if !s.has(c) {
+			t.Errorf("%s missing", c)
+		}
+	}
+	for _, c := range []string{"", "D", "DF", "de", "DEU", "D1", UnknownCountry} {
+		if s.has(c) {
+			t.Errorf("%q matches", c)
+		}
+	}
+	if !s.unknown || !s.nonEmpty {
+		t.Error("UNK not recorded")
+	}
+
+	var de, deUnk, all codeSet
+	de.add("DE")
+	deUnk.add("DE")
+	deUnk.add(UnknownCountry)
+	all.addAll(&de)
+	all.addAll(&deUnk)
+	if !all.covers(&de) || !all.covers(&deUnk) || !deUnk.covers(&de) || de.covers(&deUnk) || !de.covers(&codeSet{}) {
+		t.Error("covers is wrong")
+	}
+}
+
+func TestGroupPrefixTableIsShared(t *testing.T) {
+	groups := map[string]Selector{
+		"office": {IPs: []string{"203.0.113.0/24"}},
+		"geo":    {Countries: []string{"DE"}},
+	}
+	rs := mustCompile(t, groups, []Rule{
+		{Action: "allow", Selector: Selector{Groups: []string{"office"}}},
+		{Action: "deny", Selector: Selector{Groups: []string{"office"}, Countries: []string{"US"}}},
+		{Action: "allow", Selector: Selector{Groups: []string{"office"}, IPs: []string{"192.0.2.1"}}},
+		{Action: "allow", Selector: Selector{Groups: []string{"office", "geo"}}},
+		{Action: "allow", Selector: Selector{Groups: []string{"geo"}}},
+	}, "deny")
+	table := func(i int) *bart.Lite { return rs.rules[i].set.prefixes }
+	if table(0) == nil || table(0) != table(1) {
+		t.Error("single-group rules do not share the group's table")
+	}
+	if table(2) == table(0) || table(3) == table(0) {
+		t.Error("a rule with more prefix sources shares the group's table")
+	}
+	if table(4) != nil {
+		t.Error("a group without prefixes produced a table")
+	}
+	if !table(2).Contains(netip.MustParseAddr("192.0.2.1")) || table(0).Contains(netip.MustParseAddr("192.0.2.1")) {
+		t.Error("a rule's own prefix leaked into, or is missing next to, the group's table")
+	}
+	if d := eval(rs, newFakeGeo(), "203.0.113.9"); d.Action != ActionAllow || d.Rule != 0 {
+		t.Errorf("got %+v", d)
+	}
+	if got := rs.shadowedRules(); !slices.Equal(got, []int{4}) {
+		t.Errorf("shadowed = %v, want [4]", got)
 	}
 }
