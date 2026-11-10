@@ -33,13 +33,17 @@ change. Do not edit the files by hand.
   `caddy_netacl_db_downloads_total{db="list",result="error"}`, retried an hour
   later, and the cached copy keeps serving. `result="success"` counts new
   versions installed, not checks that found the list unchanged.
+  `caddy_netacl_list_checked_epoch_seconds{list="..."}` is the time of the
+  last check that succeeded, so it shows how stale a list is.
 
 ## Format
 
 The same as an `ip_file`: one IP or CIDR per line, IPv4 and IPv6 mixed, with
 blank lines and text after `#` ignored. caddy-netacl additionally rejects a
-list that is empty, contains a `/0` prefix or is larger than 16 MB, and keeps
-using the previous copy.
+list that is empty, larger than 16 MB, or contains a prefix shorter than `/8`
+(IPv4) or `/19` (IPv6), and keeps using the previous copy. No single service
+needs a broader range, and one in an `allow` rule would let in a large part
+of the internet.
 
 List names are their path below the base URL without `.txt`, for example
 `github/hooks`. They may use lowercase letters, digits, `_`, `-` and `.`,
@@ -48,7 +52,8 @@ with `/` between parts.
 ## Hosting your own lists
 
 Any static file server or Git hosting served over HTTPS works as a
-`lists_url`; plain `http` URLs are rejected. The simplest
+`lists_url`; plain `http` URLs are rejected, and so is a redirect through
+one. The simplest
 way is to fork this repository: the `Update IP lists` workflow regenerates
 `lists/` in your fork too. The workflow commits to the default branch, so
 that branch must allow pushes from `github-actions[bot]`.

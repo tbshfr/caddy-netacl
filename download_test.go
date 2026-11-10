@@ -251,9 +251,15 @@ func TestAutoUpdateLeavesExplicitPathsAlone(t *testing.T) {
 }
 
 func TestUpdateOnce(t *testing.T) {
+	// The clock follows the test database's build date, not today's: with a
+	// database cached from an earlier month, "next" would already be published.
+	src, err := loadDB(dbCountry, testDB(t, dbCountry))
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := newFakeDBIP(t)
-	f.publishReal(t, dbCountry, releaseMonth(time.Now()))
-	app := newAutoApp(t, f, "", &App{})
+	f.publishReal(t, dbCountry, releaseMonth(src.built))
+	app := newAutoApp(t, f, "", &App{now: func() time.Time { return src.built }})
 	e, err := countryPolicy.compile(app, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +269,6 @@ func TestUpdateOnce(t *testing.T) {
 	ctx := context.Background()
 	fetched := map[dbKind]time.Time{}
 
-	app.now = func() time.Time { return first.built }
 	app.updateOnce(ctx, fetched)
 	if loaded() != first || len(f.hits) != 1 {
 		t.Fatalf("up-to-date database was checked or replaced: %v", f.hits)

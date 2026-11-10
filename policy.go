@@ -21,7 +21,8 @@ type Policy struct {
 	// What a failed country or ASN lookup does. "skip" (the default): the
 	// selectors that needed it do not match and evaluation continues, so a
 	// deny rule fails open. "deny": the request is denied as soon as a rule
-	// cannot be checked, so the policy fails closed.
+	// cannot be checked, so the policy fails closed. That includes requests
+	// without a client IP.
 	OnLookupError string `json:"on_lookup_error,omitempty"`
 }
 

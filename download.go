@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -57,11 +56,7 @@ func fetchDBIP(ctx context.Context, client *http.Client, baseURL string, kind db
 		return nil, fmt.Errorf("%s: %w", url, err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return nil, err
-	}
-	// Same directory as dst, so the rename is atomic.
-	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+	tmp, err := createTemp(dst)
 	if err != nil {
 		return nil, err
 	}

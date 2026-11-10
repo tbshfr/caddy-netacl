@@ -199,7 +199,7 @@ no rule matches, `default` decides.
 | Address has a continent but no country in the database | `continent` can match. `country UNK` matches. |
 | Address not in the ASN database | `asn` selectors do not match. |
 | IPv4-mapped IPv6 (`::ffff:a.b.c.d`) | Unmapped to IPv4 before matching, for both client addresses and configured prefixes. |
-| No client IP available | Treated as an unknown address, so `default` decides. Logged at debug level. |
+| No client IP available | No rule can match, so `default` decides, or the request is denied with `on_lookup_error deny`. Logged at debug level. |
 | Database lookup fails | Depends on `on_lookup_error`, see [Lookup errors](#lookup-errors). |
 | A rule can never match | A warning at config load, e.g. `allow @staff` after `allow private_ranges` when staff is all private. |
 
@@ -224,6 +224,12 @@ is rare. If one does fail, `on_lookup_error` decides what happens:
 - `deny`: the request is denied as soon as a rule cannot be checked. This
   **fails closed**. `netacl_rule` is set to `lookup_error`, and the handler
   responds with its `status`.
+
+`on_lookup_error` also covers requests without a usable client IP, for
+example on a Unix socket listener. No rule can be checked for them, so with
+`skip` they get the `default`, and with `deny` they are denied and
+`netacl_rule` is set to `no_client_ip`. Use `deny` if a policy with
+`default allow` must not be bypassed that way.
 
 Either way, the failure is counted in
 `caddy_netacl_lookups_total{result="error"}`. It is also logged at `error`,
@@ -313,6 +319,11 @@ databases kept current by MaxMind's `geoipupdate`. Replace them with an atomic
 rename (write to a temporary file in the same directory, then `mv`). Combine
 this with `reload_interval` to pick up changes without a `caddy reload`.
 
+Replace an `ip_file` the same way. A half-written database fails validation
+and is skipped, but a half-written `ip_file` is a valid, shorter list: if a
+reload reads it while it is being rewritten in place, the missing entries do
+not match until the next check.
+
 ### Reloading
 
 With `reload_interval` set, netacl checks the databases and every `ip_file`
@@ -369,7 +380,9 @@ To use lists from your own fork or server instead, set `lists_url`:
 ```
 
 Whoever controls `lists_url` decides which addresses your `allow` rules let
-in, so only point it at a source you trust.
+in, so only point it at a source you trust. The URL must not have a query or
+fragment, because list names are appended to it. A password in it is kept out
+of the logs.
 
 The available lists, how they are downloaded and updated, and how to publish
 your own are described in [`lists/README.md`](lists/README.md).
@@ -384,7 +397,7 @@ Every evaluation sets these vars, which you can add to access logs with
 | Var | Example | Notes |
 |---|---|---|
 | `netacl_decision` | `deny` | `allow` or `deny` |
-| `netacl_rule` | `2` | Zero-based index of the matching rule, `default`, or `lookup_error` |
+| `netacl_rule` | `2` | Zero-based index of the matching rule, `default`, `lookup_error` or `no_client_ip` |
 | `netacl_country` | `DE` | Empty if not looked up. `UNK` if not found. |
 | `netacl_continent` | `EU` | Empty if not looked up or not found |
 | `netacl_asn` | `3320` | Empty if not looked up or not found |
@@ -420,6 +433,7 @@ With `metrics` enabled in Caddy:
 | `caddy_netacl_db_reloads_total` | `db` (`country`, `asn`, `ip_file`), `result` (`success`, `error`) |
 | `caddy_netacl_db_downloads_total` | `db` (`country`, `asn`, `list`), `result` (`success`, `error`) |
 | `caddy_netacl_db_build_epoch_seconds` | `db`: alert on this to catch stale databases |
+| `caddy_netacl_list_checked_epoch_seconds` | `list`: when the list was last downloaded or confirmed unchanged. Normally under a day old; alert on this to catch lists whose updates keep failing |
 
 #### Per-host metrics
 

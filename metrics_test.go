@@ -24,11 +24,12 @@ func TestMetricsExportedAtZero(t *testing.T) {
 				c    prometheus.Collector
 				want int
 			}{
-				"decisions": {m.decisions, decisions},
-				"lookups":   {m.lookups, lookups},
-				"reloads":   {m.reloads, 6},
-				"downloads": {m.downloads, 6},
-				"buildTime": {m.buildTime, 0}, // a 0 build time would read as a 56-year-old database
+				"decisions":   {m.decisions, decisions},
+				"lookups":     {m.lookups, lookups},
+				"reloads":     {m.reloads, 6},
+				"downloads":   {m.downloads, 6},
+				"buildTime":   {m.buildTime, 0}, // a 0 build time would read as a 56-year-old database
+				"listChecked": {m.listChecked, 0},
 			} {
 				if got := testutil.CollectAndCount(tc.c); got != tc.want {
 					t.Errorf("%s: %d series before any event, want %d", name, got, tc.want)

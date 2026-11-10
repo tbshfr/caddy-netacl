@@ -77,6 +77,20 @@ type App struct {
 // A shorter interval would mostly spend CPU on stat calls.
 const minReloadInterval = time.Second
 
+const downloadTimeout = 10 * time.Minute
+
+// On a plain HTTP hop, anyone on the network path could swap the response or
+// the next redirect.
+func httpsOnlyRedirect(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirected to non-https URL %s", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
+
 func (*App) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "netacl",
@@ -103,7 +117,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 	}
 	a.lookupErrLog.every = time.Minute
 	if a.httpClient == nil {
-		a.httpClient = &http.Client{Timeout: 10 * time.Minute}
+		a.httpClient = &http.Client{Timeout: downloadTimeout, CheckRedirect: httpsOnlyRedirect}
 	}
 	if a.dbipURL == "" {
 		a.dbipURL = dbipBaseURL
@@ -206,7 +220,7 @@ func (a *App) logStart() {
 		zap.Int("lists", len(a.lists)),
 	}
 	if len(a.lists) > 0 {
-		fields = append(fields, zap.String("lists_url", a.ListsURL))
+		fields = append(fields, zap.String("lists_url", redactURL(a.ListsURL)))
 	}
 	a.mu.Unlock()
 	a.logger.Info("started", append(fields,
@@ -293,7 +307,7 @@ func (a *App) openDB(kind dbKind, path string) (*dbHandle, error) {
 			zap.String("db", kind.String()), zap.String("path", path), zap.Error(err))
 	}
 
-	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(a.ctx, downloadTimeout)
 	h, err = fetchLatestDBIP(ctx, a.httpClient, a.dbipURL, kind, a.now(), path)
 	cancel()
 	if err != nil {

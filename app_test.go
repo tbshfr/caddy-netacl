@@ -342,6 +342,39 @@ func TestClientIPVar(t *testing.T) {
 	}
 }
 
+func TestNoClientIPFailsClosed(t *testing.T) {
+	app, _ := newTestApp(t, &App{})
+	noAddr := func() *http.Request {
+		r := newRequest("10.0.0.1")
+		r.RemoteAddr = "@"
+		return r
+	}
+	p := Policy{Rules: []Rule{{Action: "deny", Selector: Selector{IPs: []string{"192.0.2.0/24"}}}}, Default: "allow"}
+	e, err := p.compile(app, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := e.evaluate(noAddr()); d.Action != ActionAllow || d.Rule != ruleDefault {
+		t.Errorf("on_lookup_error skip: %+v, want the default", d)
+	}
+
+	p.OnLookupError = lookupErrorDeny
+	e, err = p.compile(app, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := noAddr()
+	if d := e.evaluate(r); d.Action != ActionDeny || d.Rule != ruleNoClientIP {
+		t.Errorf("on_lookup_error deny: %+v, want deny by no_client_ip", d)
+	}
+	if got := caddyhttp.GetVar(r.Context(), VarRule); got != "no_client_ip" {
+		t.Errorf("%s = %v", VarRule, got)
+	}
+	if d := e.evaluate(newRequest("198.51.100.1")); d.Action != ActionAllow {
+		t.Errorf("request with a client IP: %+v", d)
+	}
+}
+
 func TestParseAddr(t *testing.T) {
 	for in, want := range map[string]string{
 		"192.0.2.1:80":          "192.0.2.1",

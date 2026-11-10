@@ -27,6 +27,13 @@ const defaultListsURL = "https://raw.githubusercontent.com/tbshfr/caddy-netacl/m
 // guards against a broken or malicious response.
 const maxListSize = 16 << 20
 
+// Far wider than any published range (a /15 and a /29), so a shorter prefix
+// is a mistake or an attack upstream.
+const (
+	minListBits4 = 8
+	minListBits6 = 19
+)
+
 var errNotModified = errors.New("not modified")
 
 // remoteList is a list selector's data. The list's file is the cached copy in
@@ -67,10 +74,25 @@ func validateListName(name string) error {
 // add addresses to them.
 func validateListsURL(s string) error {
 	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return fmt.Errorf("lists_url %q: must be an https URL", s)
+	if err != nil {
+		// url.Parse's error quotes the URL, which may hold user:password@.
+		return errors.New("lists_url: must be an https URL")
+	}
+	if u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("lists_url %q: must be an https URL", u.Redacted())
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("lists_url %q: must not have a query or fragment, because list names are appended to it", u.Redacted())
 	}
 	return nil
+}
+
+func redactURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "(unparseable URL)"
+	}
+	return u.Redacted()
 }
 
 // listsCacheDir returns the cache directory for one base URL. Each base URL
@@ -82,12 +104,20 @@ func listsCacheDir(dataDir, baseURL string) string {
 }
 
 // parseRemoteList is stricter than ip_file: the content comes from someone
-// else, and an empty list or one matching everything is almost certainly a
-// mistake upstream. In an allow rule, a /0 would open the site to everyone.
+// else, and an empty list or one matching a large part of the internet is
+// almost certainly a mistake upstream. In an allow rule, a /0 would open the
+// site to everyone.
 func parseRemoteList(name string, data []byte) (*ipListData, error) {
 	d, err := parseIPList(bytes.NewReader(data), name, func(p netip.Prefix) error {
-		if p.Bits() == 0 {
+		limit := minListBits6
+		if p.Addr().Is4() {
+			limit = minListBits4
+		}
+		switch {
+		case p.Bits() == 0:
 			return fmt.Errorf("%s matches every address", p)
+		case p.Bits() < limit:
+			return fmt.Errorf("%s is too broad for a list: the shortest prefix allowed is /%d", p, limit)
 		}
 		return nil
 	})
@@ -114,6 +144,7 @@ func fetchList(ctx context.Context, client *http.Client, url, etag string) (*lis
 	if err != nil {
 		return nil, err
 	}
+	shown := redactURL(url)
 	req.Header.Set("User-Agent", "caddy-netacl")
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
@@ -124,35 +155,55 @@ func fetchList(ctx context.Context, client *http.Client, url, etag string) (*lis
 	}
 	defer resp.Body.Close()
 	if resp.Request.URL.Scheme != "https" {
-		return nil, fmt.Errorf("%s: redirected to non-https URL %s", url, resp.Request.URL.Redacted())
+		return nil, fmt.Errorf("%s: redirected to non-https URL %s", shown, resp.Request.URL.Redacted())
 	}
 	switch {
 	case resp.StatusCode == http.StatusNotModified && etag != "":
 		return nil, errNotModified
 	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("%s: %s", url, resp.Status)
+		return nil, fmt.Errorf("%s: %s", shown, resp.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", url, err)
+		return nil, fmt.Errorf("%s: %w", shown, err)
 	}
 	if len(body) > maxListSize {
-		return nil, fmt.Errorf("%s: larger than %d bytes", url, maxListSize)
+		return nil, fmt.Errorf("%s: larger than %d bytes", shown, maxListSize)
 	}
-	d, err := parseRemoteList(url, body)
+	d, err := parseRemoteList(shown, body)
 	if err != nil {
 		return nil, err
 	}
 	return &listDownload{body: body, data: d, sum: sha256.Sum256(body), etag: resp.Header.Get("ETag")}, nil
 }
 
+// Longer than any download can run, see downloadTimeout.
+const staleTempAge = 6 * downloadTimeout
+
+// Same directory as dst, so the rename is atomic. A process killed
+// mid-download leaves its temporary file behind, so stale ones are removed.
+func createTemp(dst string) (*os.File, error) {
+	dir, prefix := filepath.Dir(dst), "."+filepath.Base(dst)+"."
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), prefix) {
+				continue
+			}
+			if info, err := e.Info(); err == nil && info.Mode().IsRegular() && time.Since(info.ModTime()) > staleTempAge {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return os.CreateTemp(dir, prefix+"*")
+}
+
 // writeFileAtomic replaces dst by rename, so readers never see a partial
 // file.
 func writeFileAtomic(dst string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*")
+	tmp, err := createTemp(dst)
 	if err != nil {
 		return err
 	}
@@ -214,6 +265,7 @@ func (a *App) openList(name string) (*remoteList, error) {
 		// The mtime is the last check, so restarts and config reloads do not
 		// download the list again before it is due.
 		l.checked = st.ModTime()
+		a.metrics.listChecked.WithLabelValues(name).Set(float64(l.checked.Unix()))
 		a.logger.Info("loaded list", zap.String("list", name), zap.String("path", path), zap.Int("entries", d.count))
 		return l, nil
 	}
@@ -235,7 +287,8 @@ func (a *App) openList(name string) (*remoteList, error) {
 	l.list.cur.Store(dl.data)
 	l.sum, l.etag, l.checked = dl.sum, dl.etag, a.now()
 	a.metrics.downloads.WithLabelValues("list", "success").Inc()
-	a.logger.Info("downloaded list", zap.String("list", name), zap.String("url", l.url), zap.Int("entries", dl.data.count))
+	a.metrics.listChecked.WithLabelValues(name).Set(float64(l.checked.Unix()))
+	a.logger.Info("downloaded list", zap.String("list", name), zap.String("url", redactURL(l.url)), zap.Int("entries", dl.data.count))
 	return l, nil
 }
 
@@ -285,9 +338,10 @@ func (a *App) updateLists(ctx context.Context) {
 			l.list.cur.Store(dl.data)
 			l.sum, l.etag = dl.sum, dl.etag
 			a.metrics.downloads.WithLabelValues("list", "success").Inc()
-			a.logger.Info("updated list", zap.String("list", l.name), zap.String("url", l.url), zap.Int("entries", dl.data.count))
+			a.logger.Info("updated list", zap.String("list", l.name), zap.String("url", redactURL(l.url)), zap.Int("entries", dl.data.count))
 		}
 		l.checked = now
+		a.metrics.listChecked.WithLabelValues(l.name).Set(float64(now.Unix()))
 		if err := os.Chtimes(l.list.path, now, now); err != nil {
 			a.logger.Debug("cannot record list check time", zap.String("list", l.name), zap.Error(err))
 		}

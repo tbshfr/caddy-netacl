@@ -13,7 +13,7 @@ import (
 // empty when no rule needed that database.
 const (
 	VarDecision  = "netacl_decision"
-	VarRule      = "netacl_rule"    // rule index, "default" or "lookup_error"
+	VarRule      = "netacl_rule"    // rule index, "default", "lookup_error" or "no_client_ip"
 	VarCountry   = "netacl_country" // UNK if not found
 	VarContinent = "netacl_continent"
 	VarASN       = "netacl_asn"
@@ -78,6 +78,7 @@ var (
 	actionVars           = [...]any{ActionAllow: ActionAllow.String(), ActionDeny: ActionDeny.String()}
 	ruleDefaultVar   any = Decision{Rule: ruleDefault}.ruleName()
 	ruleLookupErrVar any = Decision{Rule: ruleLookupError}.ruleName()
+	ruleNoClientVar  any = Decision{Rule: ruleNoClientIP}.ruleName()
 	// Two-letter country and continent codes, see codeVar.
 	codeVars = func() (v [26 * 26]any) {
 		for i := range v {
@@ -104,6 +105,8 @@ func setDecisionVars(vars map[string]any, rs *ruleset, d Decision, ls *lookupSta
 		vars[VarRule] = ruleDefaultVar
 	case ruleLookupError:
 		vars[VarRule] = ruleLookupErrVar
+	case ruleNoClientIP:
+		vars[VarRule] = ruleNoClientVar
 	default:
 		vars[VarRule] = rs.rules[d.Rule].varValue
 	}

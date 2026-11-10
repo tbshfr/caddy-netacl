@@ -53,6 +53,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 			reason = "default"
 		case ruleLookupError:
 			reason = "a failed database lookup (on_lookup_error deny)"
+		case ruleNoClientIP:
+			reason = "a missing client IP (on_lookup_error deny)"
 		default:
 			reason = "rule " + d.ruleName()
 		}

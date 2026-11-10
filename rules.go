@@ -461,8 +461,8 @@ type ruleset struct {
 	def   Action
 	needs need
 	// denyOnLookupError ends the evaluation with deny when a rule cannot be
-	// checked because a lookup failed. Otherwise the failed selector simply
-	// does not match.
+	// checked because a lookup failed or the request has no client address.
+	// Otherwise the failed selector simply does not match.
 	denyOnLookupError bool
 }
 
@@ -470,11 +470,13 @@ type ruleset struct {
 const (
 	ruleDefault     = -1
 	ruleLookupError = -2
+	ruleNoClientIP  = -3
 )
 
 type Decision struct {
 	Action Action
-	// Index of the matching rule, ruleDefault or ruleLookupError.
+	// Index of the matching rule, ruleDefault, ruleLookupError or
+	// ruleNoClientIP.
 	Rule int
 }
 
@@ -484,11 +486,18 @@ func (d Decision) ruleName() string {
 		return "default"
 	case ruleLookupError:
 		return "lookup_error"
+	case ruleNoClientIP:
+		return "no_client_ip"
 	}
 	return strconv.Itoa(d.Rule)
 }
 
 func (rs *ruleset) evaluate(ls *lookupState, src geoSource, obs lookupObserver) Decision {
+	// No rule can be checked without a client address, so a fail-closed
+	// policy must not reach the default.
+	if rs.denyOnLookupError && !ls.addr.IsValid() {
+		return Decision{Action: ActionDeny, Rule: ruleNoClientIP}
+	}
 	for i := range rs.rules {
 		r := &rs.rules[i]
 		matched, lookupFailed := r.set.match(ls, src, obs)

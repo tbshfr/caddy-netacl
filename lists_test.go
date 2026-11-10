@@ -74,6 +74,9 @@ func TestParseRemoteList(t *testing.T) {
 		"192.0.2.0/24\nnot-an-ip\n":   `l:2: invalid IP or CIDR "not-an-ip"`,
 		"::ffff:0.0.0.0/96\n":         "l:1: 0.0.0.0/0 matches every address",
 		"192.0.2.0/24\n10.0.0.0/33\n": `l:2: invalid IP or CIDR "10.0.0.0/33"`,
+		"0.0.0.0/1\n128.0.0.0/1\n":    "l:1: 0.0.0.0/1 is too broad for a list: the shortest prefix allowed is /8",
+		"192.0.2.0/24\n2000::/3\n":    "l:2: 2000::/3 is too broad for a list: the shortest prefix allowed is /19",
+		"::ffff:0.0.0.0/100\n":        "l:1: 0.0.0.0/4 is too broad for a list: the shortest prefix allowed is /8",
 	} {
 		_, err := parseRemoteList("l", []byte(body))
 		if err == nil || err.Error() != want {
@@ -179,6 +182,9 @@ func TestListDownloadsOnFirstUse(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(app.metrics.downloads.WithLabelValues("list", "success")); got != 1 {
 		t.Errorf("list downloads = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(app.metrics.listChecked.WithLabelValues("github/hooks")); time.Since(time.Unix(int64(got), 0)) > time.Minute {
+		t.Errorf("list check time = %v, want now", got)
 	}
 
 	// A restart uses the cache, and does not check before the list is due.
@@ -337,6 +343,74 @@ func TestListRedirectToHTTP(t *testing.T) {
 	_, err := fetchList(t.Context(), redirect.Client(), redirect.URL+"/hooks.txt", "")
 	if err == nil || !strings.Contains(err.Error(), "redirected to non-https URL") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestRedirectThroughHTTP(t *testing.T) {
+	final := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("192.0.2.0/24\n"))
+	}))
+	t.Cleanup(final.Close)
+	plain := httptest.NewServer(http.RedirectHandler(final.URL+"/hooks.txt", http.StatusFound))
+	t.Cleanup(plain.Close)
+	first := httptest.NewTLSServer(http.RedirectHandler(plain.URL+"/hooks.txt", http.StatusFound))
+	t.Cleanup(first.Close)
+
+	client := first.Client()
+	client.CheckRedirect = httpsOnlyRedirect
+	_, err := fetchList(t.Context(), client, first.URL+"/hooks.txt", "")
+	if err == nil || !strings.Contains(err.Error(), "redirected to non-https URL") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestCreateTempRemovesStaleLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "hooks.txt")
+	write := func(name string, age time.Duration) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-age)
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	stale := write(".hooks.txt.111", 2*staleTempAge)
+	running := write(".hooks.txt.222", time.Minute)
+	other := write(".actions.txt.333", 2*staleTempAge)
+	cached := write("hooks.txt", 2*staleTempAge)
+
+	if err := writeFileAtomic(dst, []byte("192.0.2.0/24\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale temporary file was kept: %v", err)
+	}
+	for _, path := range []string{running, other, cached} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was removed: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+func TestListsURLCredentialsAreRedacted(t *testing.T) {
+	if got := redactURL("https://user:secret@example.com/lists/a.txt"); strings.Contains(got, "secret") {
+		t.Errorf("redactURL = %s", got)
+	}
+	for _, u := range []string{"https://user:secret@example.com/lists?ref=main", "http://user:secret@example.com/lists"} {
+		err := validateListsURL(u)
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Errorf("%s: got %v", u, err)
+		}
+	}
+	if err := validateListsURL("https://example.com/lists#main"); err == nil {
+		t.Error("fragment: want error")
+	}
+	if err := validateListsURL("https://user:secret@example.com/lists"); err != nil {
+		t.Errorf("credentials: %v", err)
 	}
 }
 

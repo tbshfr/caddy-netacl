@@ -9,11 +9,12 @@ import (
 )
 
 type metrics struct {
-	decisions *prometheus.CounterVec
-	lookups   *prometheus.CounterVec
-	reloads   *prometheus.CounterVec
-	downloads *prometheus.CounterVec
-	buildTime *prometheus.GaugeVec
+	decisions   *prometheus.CounterVec
+	lookups     *prometheus.CounterVec
+	reloads     *prometheus.CounterVec
+	downloads   *prometheus.CounterVec
+	buildTime   *prometheus.GaugeVec
+	listChecked *prometheus.GaugeVec
 
 	// Adds a host label to decisions and lookups.
 	perHost bool
@@ -63,6 +64,10 @@ func newMetrics(perHost bool) *metrics {
 			Namespace: ns, Subsystem: sub, Name: "db_build_epoch_seconds",
 			Help: "Build time of the loaded database, from its metadata, in seconds since the Unix epoch.",
 		}, []string{"db"}),
+		listChecked: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: ns, Subsystem: sub, Name: "list_checked_epoch_seconds",
+			Help: "Time a list was last downloaded or confirmed unchanged, in seconds since the Unix epoch.",
+		}, []string{"list"}),
 	}
 }
 
@@ -91,6 +96,10 @@ func (m *metrics) register(reg prometheus.Registerer) error {
 		return err
 	}
 	m.buildTime, err = registerOrReuse(reg, m.buildTime)
+	if err != nil {
+		return err
+	}
+	m.listChecked, err = registerOrReuse(reg, m.listChecked)
 	return err
 }
 
